@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fold — text that unfolds</title>
+<meta name="description" content="Fold is a binary document format with no text syntax, and an editor that makes it as easy to type as plain text. One medium for documents, data, spreadsheets, programs and interfaces.">
+<link rel="stylesheet" href="site.css">
+<link rel="icon" href="mark.svg" type="image/svg+xml">
+</head>
+<body>
+
+<header class="wrap site-header">
+  <a class="wordmark" href="./">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h12l6 6v12H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M15 3v6h6" fill="currentColor" opacity=".35" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+    Fold
+  </a>
+  <nav class="site-nav">
+    <a href="#editor">The editor</a>
+    <a href="#unification">What it replaces</a>
+    <a href="#try">Try it</a>
+    <a href="#why">Why</a>
+    <a href="#about">About</a>
+  </nav>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <h1>Text that unfolds.</h1>
+    <p class="lede">
+      Fold is a binary document format with no text syntax, and an editor that makes it as easy
+      to type as plain text. <strong>The same medium is a document, a web page, a spreadsheet, a
+      program and a file browser</strong>. It doesn't imitate each one. Underneath, they were
+      always the same thing.
+    </p>
+    <div class="hero-actions">
+      <a class="button" href="tour.html">Try it in your browser <span aria-hidden="true">→</span></a>
+      <a class="button ghost" href="#video">Watch 90 seconds</a>
+    </div>
+
+    <figure class="shot" id="top-shot">
+      <img src="img/native-webpage.png" width="1400" height="860"
+        alt="The Fold editor showing a web page: a heading, coloured navigation links, and paragraphs over a Moholy-Nagy painting, with an absolutely positioned box on top.">
+      <figcaption>
+        <strong>A web page with no HTML.</strong> Every word on it is a value in a Fold document, and
+        the styling is a <code>CSS</code> metadata channel on those values. The painting is a JPEG
+        stored as bytes inside the page's own metadata. The editor drawing it is the same one you
+        type a sentence into, so view-source and view-page are one view at different depths.
+      </figcaption>
+    </figure>
+  </div>
+
+  <section id="editor">
+    <div class="wrap">
+      <div class="kicker">The editor</div>
+      <h2>One editor, every depth.</h2>
+      <div class="narrow">
+        <p>
+          Fold's main editor is a native Windows application written in C++. The document
+          <em>is</em> its byte buffer: there's no separate tree to keep in sync, edits happen in place,
+          and saving writes the bytes as they stand. It's also where the format reaches outside itself,
+          into the filesystem and the network.
+        </p>
+      </div>
+
+      <figure class="shot">
+        <img src="img/native-encoding.png" width="1485" height="912" loading="lazy"
+          alt="The encoding window: a structure outline of every segment with its type and length, a heap map of coloured cells, raw bytes in hex, and an inspector describing free space and growth policy.">
+        <figcaption>
+          <strong>The bytes, live.</strong> The encoding window shows every segment with its type and
+          length, a map of the heap, and the raw bytes. The hatched runs are <em>Free</em>: gaps inside the
+          document that edits grow into, so typing a letter rewrites a few bytes instead of the whole file.
+          Each edit reports what it wrote, moved, freed and re-headered, and the map colours them as they
+          happen.
+        </figcaption>
+      </figure>
+
+      <figure class="shot">
+        <img src="img/native-types.png" width="1400" height="860" loading="lazy"
+          alt="A document about types: values with a Fold-Type annotation, where values that don't conform are highlighted in light red.">
+        <figcaption>
+          <strong>A type is an example.</strong> There's no schema language. A type is a Fold value
+          attached as metadata, and a value conforms if it has the same shape. <code>[0 0]</code> means
+          "a list of two integers." Values that don't fit are tinted, not refused. Structured editors have
+          failed for fifty years by forbidding invalid states, and Fold lets them exist and says so.
+        </figcaption>
+      </figure>
+
+      <div class="grid3">
+        <div class="card">
+          <h3>Edits in place</h3>
+          <p>Open a file memory-mapped and every keystroke lands in the file as it's typed. If the process
+            is killed mid-edit, what's left on disk still parses.</p>
+        </div>
+        <div class="card">
+          <h3>The filesystem is a tree</h3>
+          <p><code>OS()</code> is the machine as a document: input, output, files and sockets. A file's
+            contents are edited where it's listed, and changes are written when you accept them.</p>
+        </div>
+        <div class="card">
+          <h3>A port is a value</h3>
+          <p>Write a value into <code>OS() sockets 7451</code> and accept, and it's served. Clients send
+            Patches and get back what they evaluate to. Later changes are pushed to them as Patches too.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="unification">
+    <div class="wrap">
+      <div class="kicker">One medium</div>
+      <h2>Most of the software stack is an artifact of text.</h2>
+      <div class="narrow">
+        <p>
+          Plain text has no structure, no references and nowhere to put context, so every
+          application rebuilds those for itself, and its data can't leave without losing them.
+          Give the baseline medium those three things and a long list of separate tools turns
+          out to be one tool, looked at from different depths.
+        </p>
+      </div>
+      <table class="collapse">
+        <thead><tr><th>Today</th><th>In Fold</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>Text editor</td><td>The same editor, with its cursor at the character level. Typing a sentence looks and feels exactly like typing a sentence.</td><td><a class="tag live" href="tour.html#1">Try it →</a></td></tr>
+          <tr><td>Text files vs. binary formats</td><td>One encoding. Binary, length-prefixed and random-access, and you read and edit it directly.</td><td><a class="tag live" href="tour.html#2">Try it →</a></td></tr>
+          <tr><td>Web browser vs. view-source</td><td>CSS is a metadata channel, so the page and its source are the same document at different depths.</td><td><a class="tag live" href="#top-shot">Shown above</a></td></tr>
+          <tr><td>Comments, units, provenance, file attributes</td><td>Metadata on any value, including on metadata. Hidden until the cursor gets near it.</td><td><a class="tag live" href="tour.html#3">Try it →</a></td></tr>
+          <tr><td>Schema languages</td><td>A type is an example value, checked advisorily. Nothing is ever refused.</td><td><a class="tag live" href="#editor">Shown above</a></td></tr>
+          <tr><td>Copy and paste</td><td>Paste makes a live reference, not a duplicate. Edit either and both change.</td><td><a class="tag live" href="tour.html#4">Try it →</a></td></tr>
+          <tr><td>Spreadsheet</td><td>Formulas are references with arithmetic. Any list can be drawn as a table.</td><td><a class="tag live" href="tour.html#5">Try it →</a></td></tr>
+          <tr><td>GUI buttons</td><td>A button is a pending edit to the document, and nothing changes until a person accepts it.</td><td><a class="tag live" href="tour.html#6">Try it →</a></td></tr>
+          <tr><td>Undo stack, macros, scripting</td><td>Your editing session is a program, and editing a computed value records a program.</td><td><a class="tag live" href="tour.html#7">Try it →</a></td></tr>
+          <tr><td>Logs and trace viewers</td><td>A trace is a document. Walk it with the arrow keys, and provenance opens as you arrive.</td><td><a class="tag live" href="tour.html#8">Try it →</a></td></tr>
+          <tr><td>JSON, CSV, URLs, Base64</td><td>Converters that fold text formats into structure, and unfold them back out.</td><td><span class="tag">Built</span></td></tr>
+          <tr><td>File format, wire format, heap</td><td>One encoding, edited in place. Free space inside the document makes the file a heap.</td><td><a class="tag live" href="#editor">Shown above</a></td></tr>
+          <tr><td>File manager, shell, network</td><td>The filesystem and sockets are trees in the same editor. Serving a value on a port is an edit you accept.</td><td><span class="tag">Built</span></td></tr>
+          <tr><td>Source code</td><td>A language whose grammar is Fold is already an AST: no parser, no escaping, renaming as one edit.</td><td><span class="tag">Roadmap</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="try">
+    <div class="wrap">
+      <div class="kicker">Try it</div>
+      <h2>A browser build, live on this page.</h2>
+      <div class="narrow">
+        <p>The native editor is Windows-only, so Fold also has a lighter editor in TypeScript that runs
+          in any desktop browser. It came first, and it's where the interaction design was worked
+          out. This is it, running:</p>
+      </div>
+      <p class="touch-note">The editor is keyboard-driven, so it's best on a computer. On a phone, the
+        <a href="#video">video</a> shows it in use.</p>
+
+      <div class="window" id="hero-window">
+        <div class="window-bar">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span>invoice — live</span>
+          <button type="button" data-reset>Reset</button>
+        </div>
+        <div class="frame-host" style="height: 150px">
+          <iframe title="A live Fold document: an invoice" data-src="#invoice" tabindex="-1"></iframe>
+          <button class="activate" type="button"><span>Click to edit</span></button>
+        </div>
+      </div>
+      <p class="caption">
+        It reads like a line of text, and it behaves like a spreadsheet. Click the <strong>3</strong>
+        after <em>quantity</em>. That selects the whole <em>quantity: 3</em> pair, so press <kbd>PgDn</kbd>
+        to step inside it and <kbd>→</kbd> to land on the number. Then press <kbd>Backspace</kbd> and type
+        <kbd>2</kbd>. The subtotal drops below 30, free delivery turns False, a delivery charge appears, and
+        the total follows. Nothing on the line is a formula you can see.
+      </p>
+      <p><a class="button" href="tour.html">Take the eight-step tour <span aria-hidden="true">→</span></a></p>
+    </div>
+  </section>
+
+  <section id="video">
+    <div class="wrap">
+      <div class="kicker">In motion</div>
+      <h2>Ninety seconds, if you'd rather watch.</h2>
+      <div class="video-slot">Video to come: the native editor typing a sentence, unfolding the web
+        page above into its metadata, editing a file in place with the heap map running, and serving
+        a value on a port.</div>
+    </div>
+  </section>
+
+  <section id="why">
+    <div class="wrap">
+      <div class="kicker">Why</div>
+      <h2>Human-readable was a typewriter constraint.</h2>
+      <div class="two-col">
+        <div>
+          <p>
+            Early computers talked to people through teletypes, so printable characters became the
+            only building blocks of anything a person was meant to read: source code, config,
+            HTML, JSON, the command line. Every CPU and data structure, meanwhile, uses lengths
+            and offsets, because they allow random access. Computing pays permanently to convert
+            between the two.
+          </p>
+          <p>
+            Text marks structure with reserved characters, so every byte has to be scanned and
+            every reserved character needs an escape. Length-prefixed binary has neither problem,
+            but its lengths have to be kept in sync with every edit, which no typewriter could do.
+          </p>
+        </div>
+        <div>
+          <p>
+            <strong>A smart editor is exactly that missing machinery.</strong> An editor that
+            updates lengths on every keystroke makes a binary, random-access encoding writable
+            by a person, in a text field, as fast as they can type.
+          </p>
+          <p>
+            Nothing about UTF-8 is readable as bits either. It's readable because a text editor is
+            installed everywhere. The bar for a successor isn't legibility. It's being worth
+            installing everywhere, which means first being exactly as good as text at being text.
+          </p>
+        </div>
+      </div>
+
+      <div class="grid3">
+        <div class="card">
+          <h3>Metadata</h3>
+          <p>Any value, metadata included, can carry markup keyed by language. Context can be
+            present without being in the way, and tools that don't understand it pass it through
+            untouched.</p>
+        </div>
+        <div class="card">
+          <h3>Patch</h3>
+          <p>A program that evaluates to data, written as editor operations. References, formulas,
+            undo history and macros are all Patches. Editing is programming.</p>
+        </div>
+        <div class="card">
+          <h3>Free</h3>
+          <p>Unallocated gaps at byte granularity. Edits happen in place, and a document can serve
+            as a program's runtime heap.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="built">
+    <div class="wrap">
+      <div class="kicker">How it's built</div>
+      <h2>Two implementations, held to one contract.</h2>
+      <div class="stats">
+        <div><div class="stat">400+</div><div class="stat-label">tests in the C++ editor, including cutting every edit short after each byte and checking the file still parses</div></div>
+        <div><div class="stat">700+</div><div class="stat-label">tests in the TypeScript editor</div></div>
+        <div><div class="stat">1</div><div class="stat-label">conformance suite both must pass</div></div>
+      </div>
+      <div class="two-col">
+        <div>
+          <h3>C++, native</h3>
+          <p>The main editor. Win32 and Direct2D, with no other dependencies. An allocator whose free
+            list is the document's own Free space, undo as a journal of overwritten bytes, a guard that
+            keeps an interrupted edit parseable, lazy indexing of large files, Patch evaluation, the
+            filesystem and sockets.</p>
+        </div>
+        <div>
+          <h3>TypeScript, in the browser</h3>
+          <p>The interaction probe. It settled how typing should feel, how the hierarchical cursor moves,
+            and how copy-and-paste-as-reference and recording by demonstration behave, before the native
+            editor built on them.</p>
+        </div>
+      </div>
+      <p class="narrow">
+        Every design decision is written down with the argument behind it. The manifesto says
+        which decisions are settled, which are open, and what would prove the project wrong.
+        <a href="../Manifesto/MANIFESTO.md">Read the manifesto</a>.
+      </p>
+    </div>
+  </section>
+
+  <section id="risks">
+    <div class="wrap narrow">
+      <div class="kicker">Honestly</div>
+      <h2>What would sink it.</h2>
+      <ul class="plain">
+        <li><strong>A medium is a network effect.</strong> Fold is worth having once there's data in it.
+          The bet is to win one niche outright first, and agent traces are the candidate: deeply
+          nested, full of provenance, and currently viewed as scrolling text.</li>
+        <li><strong>Language models read text.</strong> Their tokenizers are fitted to text, and nothing
+          here depends on that changing. The claim that survives is narrower: structure known
+          out of band beats structure spelled out inline on every turn.</li>
+        <li><strong>Parsing is cheap now.</strong> "Parsing is hard" is the weakest argument, so it's
+          dropped. What remains is random access, in-place edits, metadata channels,
+          references and determinism.</li>
+        <li><strong>Structured editors have failed for fifty years</strong>, because they forbid invalid
+          states. Fold has no grammar to violate. Validity is advisory, and a half-finished
+          document is always representable.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="about">
+    <div class="wrap narrow">
+      <div class="kicker">About</div>
+      <h2>A decade-long project, now buildable.</h2>
+      <p>
+        Fold began as <em>Infra</em>, the subject of Chris Hall's dissertation, <em>Infra: A New
+        Infrastructure for Human-Readable Data</em>, and of a SPLASH'17 Onward! paper. Five earlier
+        implementations each stalled at the same point: how much one person can build alone. This
+        one hasn't stalled.
+      </p>
+      <p><a class="button" href="tour.html">Try it in your browser <span aria-hidden="true">→</span></a></p>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap site-footer">
+  Fold, by Chris Hall. <!-- TODO: contact link, résumé link, source link once hosting is decided -->
+</footer>
+
+<script src="site.js"></script>
+</body>
+</html>

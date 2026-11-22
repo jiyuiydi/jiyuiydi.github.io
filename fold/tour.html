@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fold tour</title>
+<meta name="description" content="Eight short steps through the Fold editor, each one a live document.">
+<link rel="stylesheet" href="site.css">
+<link rel="icon" href="mark.svg" type="image/svg+xml">
+<style>
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; }
+  .site-header { width: 100%; padding-top: 12px; padding-bottom: 12px; max-width: none; border-bottom: 1px solid var(--rule); }
+  .tour {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(320px, 420px) 1fr;
+  }
+  .guide {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--rule);
+  }
+  .guide-body { flex: 1; overflow-y: auto; padding: 28px 28px 12px; }
+  .progress { display: flex; gap: 6px; margin-bottom: 22px; }
+  .progress a {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--rule);
+  }
+  .progress a[aria-current="step"] { background: var(--accent); }
+  .progress a.seen { background: color-mix(in srgb, var(--accent) 40%, var(--rule)); }
+  .step-num { font: 600 .78rem var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+  .guide h2 { font-size: 1.75rem; margin: .3em 0 .5em; }
+  .claim { font-size: 1.05rem; }
+  .try { margin: 20px 0; padding: 16px 18px; border-radius: 10px; background: var(--surface); border: 1px solid var(--rule); }
+  .try h3 { font: 600 .78rem var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: .7em; }
+  .try ol { margin: 0; padding-left: 1.2em; }
+  .try li { margin-bottom: .55em; }
+  .try li:last-child { margin-bottom: 0; }
+  details { margin: 8px 0 16px; }
+  summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+  summary:hover { color: var(--ink); }
+  details[open] summary { color: var(--ink); margin-bottom: .5em; }
+  details p { font-size: .97rem; }
+  .guide-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 28px;
+    border-top: 1px solid var(--rule);
+  }
+  .keys-hint { font-size: .8rem; color: var(--muted); padding: 0 28px 14px; }
+  .stage { display: flex; flex-direction: column; min-height: 0; padding: 20px; }
+  .stage .window { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .stage .frame-host { flex: 1; min-height: 0; }
+  .click-hint { font-size: .85rem; color: var(--muted); margin-top: 8px; text-align: center; }
+
+  @media (max-width: 860px) {
+    html, body { height: auto; }
+    .tour { grid-template-columns: 1fr; }
+    .guide { border-right: 0; }
+    .guide-body { overflow: visible; padding: 20px 16px 8px; }
+    .guide-foot, .keys-hint { padding-left: 16px; padding-right: 16px; }
+    .stage { padding: 0 16px 24px; }
+    .stage .frame-host { height: 60vh; flex: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="wrap site-header">
+  <a class="wordmark" href="./">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h12l6 6v12H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M15 3v6h6" fill="currentColor" opacity=".35" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+    Fold
+  </a>
+  <nav class="site-nav">
+    <a href="./">Home</a>
+    <a href="./#unification">What it replaces</a>
+    <a href="../Manifesto/MANIFESTO.md">Manifesto</a>
+  </nav>
+</header>
+
+<main class="tour">
+  <div class="guide">
+    <div class="guide-body">
+      <nav class="progress" aria-label="Tour steps"></nav>
+      <p class="touch-note">This tour needs a keyboard. On a phone you can read the steps, but the
+        documents won't respond to typing.</p>
+      <article id="step" aria-live="polite"></article>
+    </div>
+    <div class="guide-foot">
+      <button class="button ghost" type="button" id="prev">← Back</button>
+      <span class="tag" id="count"></span>
+      <button class="button" type="button" id="next">Next →</button>
+    </div>
+    <p class="keys-hint">
+      <kbd>PgUp</kbd> / <kbd>PgDn</kbd> move the cursor out of and into structure. On a Mac
+      laptop that's <kbd>fn</kbd>+<kbd>↑</kbd> / <kbd>fn</kbd>+<kbd>↓</kbd>. Shortcuts use
+      <kbd>Ctrl</kbd>, on a Mac too.
+    </p>
+  </div>
+
+  <div class="stage">
+    <div class="window">
+      <div class="window-bar">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span id="doc-name">document</span>
+        <button type="button" id="reset" title="Put this document back the way it started">Reset</button>
+      </div>
+      <div class="frame-host">
+        <iframe title="Live Fold editor"></iframe>
+      </div>
+    </div>
+    <p class="click-hint">The document is live. Click into it, then use the keyboard.</p>
+  </div>
+</main>
+
+<template id="steps">
+  <section data-hash="#parity" data-name="a sentence">
+    <h2>It's just text.</h2>
+    <p class="claim">Below the editor is the browser's own rendering of the same sentence. They should be
+      indistinguishable. A new medium has to be exactly as good as text at being text before
+      it's allowed to be better at anything.</p>
+    <div class="try"><h3>Try</h3><ol>
+      <li>Click at the end of the sentence and type a few words.</li>
+      <li>Use the arrow keys, <kbd>Backspace</kbd> and <kbd>Ctrl</kbd>+<kbd>Z</kbd>. Nothing should surprise you.</li>
+    </ol></div>
+    <details><summary>What's different underneath</summary>
+      <p>There's no space character in this document. <kbd>Space</kbd> starts a new element, so
+        typing a sentence produces a list of words. The gap between them is layout, and it happens to
+        be exactly as wide as a space. (<kbd>Shift</kbd>+<kbd>Space</kbd> types a literal one.)</p>
+    </details>
+  </section>
+
+  <section data-hash="#encoding" data-name="a sentence and its bytes">
+    <h2>There's no text file underneath.</h2>
+    <p class="claim">On the right are the document's actual bytes, updated as you type. Every word
+      starts with a header giving its type and length. <code>23</code> means "UTF-8, 3 bytes", followed
+      by <code>The</code>.</p>
+    <div class="try"><h3>Try</h3><ol>
+      <li>Type a new word and watch its header appear.</li>
+      <li>Type <code>1000</code>. It turns monospace as it becomes an integer, two bytes instead of four characters.
+        Add a <code>.</code> and it falls back to text, because <code>1000.</code> wouldn't survive the round
+        trip.</li>
+      <li>Put the cursor on a word and press <kbd>Tab</kbd> to change how it's drawn. The bytes don't move.</li>
+    </ol></div>
+    <details><summary>Why lengths instead of delimiters</summary>
+      <p>Because a length lets you skip a whole subtree without reading it, and nothing ever needs
+        escaping. Text formats can't do either. Lengths need machinery to keep them correct as you edit,
+        and the editor is that machinery.</p>
+    </details>
+  </section>
+
+  <section data-hash="#annotated" data-name="values with metadata">
+    <h2>Context without clutter.</h2>
+    <p class="claim">Any value can carry metadata: a unit, a name, a format, a source. It's hidden
+      until the cursor gets near it, so adding context costs the reader nothing.</p>
+    <div class="try"><h3>Try</h3><ol>
+      <li>Move along the line with <kbd>←</kbd> <kbd>→</kbd>. Above <code>37</code> a unit appears (<code>°C</code>).
+        Above <code>Wednesday</code> a name appears.</li>
+      <li>On any value, press <kbd>Esc</kbd> to step into its metadata, and type to add some.</li>
+      <li>The blue square is three bytes tagged <code>format: RGB</code>. Put the cursor on it and press
+        <kbd>Tab</kbd> to see the same bytes as hex.</li>
+      <li>Put the cursor on the compass list and press <kbd>Tab</kbd> to cycle it through table,
+        summary and stacked views.</li>
+    </ol></div>
+    <details><summary>Why this matters</summary>
+      <p>Text formats are designed impoverished on purpose, because everything you add ends up in the
+        reader's face. <code>ls</code> needs a <code>-l</code> flag for exactly that reason. Here,
+        detail can be present but collapsed, and a tool that doesn't understand some metadata passes
+        it through untouched.</p>
+    </details>
+  </section>
+
+  <section data-hash="#reference" data-name="an order">
+    <h2>Paste makes a reference.</h2>
+    <p class="claim">The customer's name is written once. <em>Ship to</em> and <em>bill to</em> are readings of
+      it, drawn with a faint shadow. In this editor, copy and paste doesn't duplicate anything. It
+      points.</p>
+    <div class="try"><h3>Try</h3><ol>
+      <li>Click the first <em>Ada Lovelace</em>. That selects the whole <em>customer</em> pair, so press
+        <kbd>PgDn</kbd> to step inside it and <kbd>→</kbd> to land on the name.</li>
+      <li>Type a few letters. All three names change.</li>
+      <li>Make your own: put the cursor on a word and press <kbd>PgUp</kbd> to select the whole word.
+        Press <kbd>Ctrl</kbd>+<kbd>C</kbd>, move somewhere else, and press <kbd>Ctrl</kbd>+<kbd>V</kbd>. Edit the original.</li>
+      <li>Put the cursor on a reading and press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> to see what it really is:
+        a tiny program that navigates to the original. <kbd>Ctrl</kbd>+<kbd>E</kbd> puts the value back.</li>
+    </ol></div>
+    <details><summary>What a reference is</summary>
+      <p>A <strong>Patch</strong>: a program written in the editor's own operations, here "go to
+        the previous field and read its value." The editor writes it for you when you paste, so you
+        never have to see an instruction. That's what makes the document a graph rather than a tree.</p>
+    </details>
+  </section>
+
+  <section data-hash="#invoice" data-name="an invoice">
+    <h2>A spreadsheet without the spreadsheet.</h2>
+    <p class="claim">Three fields are written down: item, price and quantity. The other four are
+      formulas over readings of them. In a spreadsheet, formulas are a different kind of thing
+      from values. Here they're both just values.</p>
+    <div class="try"><h3>Try</h3><ol>
+      <li>Click the <code>3</code> after <em>quantity</em>. That selects the whole pair, so press <kbd>PgDn</kbd>
+        to step inside it and <kbd>→</kbd> to land on the number.</li>
+      <li>Press <kbd>Backspace</kbd> and type <code>2</code>. The subtotal falls below 30, free delivery becomes
+        <code>False</code>, a delivery charge appears, and the total adds it.</li>
+      <li>Change the price the same way. Everything follows on every keystroke.</li>
+      <li>Put the cursor on the total and press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> to see its formula.</li>
+    </ol></div>
+    <details><summary>How it recalculates</summary>
+      <p>Each formula watches exactly the parts of the document it read, and an edit wakes only the
+        formulas that depend on it. It's the same mechanism that keeps references current in the
+        last step.</p>
+    </details>
+  </section>
+
+  <section data-hash="#counter" data-name="a counter">
+    <h2>A button is a pending edit.</h2>
+    <p class="claim">Each button is a Patch that edits the number and then stops at a
+      <code>sync</code>: a change waiting for a person to accept it. It's drawn as a button because
+      that's what it is.</p>
+    <div class="try"><h3>Try</h3><ol>
+      <li>Click <em>increment</em> a few times, then <em>decrement</em>.</li>
+      <li>Press <kbd>Ctrl</kbd>+<kbd>Z</kbd>. Each click was one edit, and undoes like one.</li>
+      <li>Click the number itself and type a new one. The buttons work from whatever is there.</li>
+    </ol></div>
+    <details><summary>Why there's no special "UI layer"</summary>
+      <p>Nothing in Fold mutates without an acceptance step, so a pending mutation and a toolbar button
+        are the same object. The same goes for saving: <kbd>Ctrl</kbd>+<kbd>S</kbd> produces a
+        button, and the button writes the file. The interface isn't a metaphor for the semantics. It's
+        a rendering of them.</p>
+    </details>
+  </section>
+
+  <section data-hash="" data-name="untitled">
+    <h2>Your editing session is a program.</h2>
+    <p class="claim">The editor doesn't keep a document and an undo stack. It keeps a program, the
+      session Patch, and the document is what that program evaluates to. Every edit you make is a
+      statement in it.</p>
+    <div class="try"><h3>Try</h3><ol>
+      <li>Type a sentence into the empty page.</li>
+      <li>Right-click the empty background below it and choose <strong>Session program</strong>.</li>
+      <li>Keep typing. Each word arrives as a statement. Choose <strong>Session program</strong> again to
+        get the document back.</li>
+    </ol></div>
+    <details><summary>The long version: programming by demonstration</summary>
+      <p>Because a person's edits and a program's instructions are the same thing, editing a reading
+        records a program. Open <a href="#kennedy" data-goto="#kennedy">the Kennedy quote</a>, copy the clause, paste a
+        reading of it, and rearrange the reading into <em>ask what you can do for your country.</em> The
+        result is a program that rewrites any clause the same way. Edit the original and the rearranged
+        one re-runs. No instruction is typed at any point.</p>
+      <p>The keys, from where the page opens: <kbd>PgUp</kbd>×2, <kbd>Ctrl</kbd>+<kbd>C</kbd>,
+        <kbd>Ctrl</kbd>+<kbd>V</kbd>, <kbd>PgDn</kbd>, then edit the reading with <kbd>Delete</kbd>, typing, and
+        <kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>→</kbd> to move words.</p>
+    </details>
+  </section>
+
+  <section data-hash="#trace" data-name="an agent trace">
+    <h2>A trace is a document you walk.</h2>
+    <p class="claim">An AI agent's execution trace is deeply nested, full of provenance, and usually
+      shown as scrolling text. In Fold it's an ordinary document: the tool calls are the
+      structure, and what each call returned rides along as metadata.</p>
+    <div class="try"><h3>Try</h3><ol>
+      <li>Click the first step, <code>list(Fold Editor JS)</code>.</li>
+      <li>Walk down with <kbd>↓</kbd>. Each step's provenance opens as you arrive and closes as you leave:
+        which tool ran, how long it took, and what came back.</li>
+      <li>Press <kbd>Esc</kbd> to step into the metadata and read it.</li>
+    </ol></div>
+    <details><summary>Whose trace this is</summary>
+      <p>It's the session in which an AI coding agent built this trace viewer. It needed no new
+        machinery: the editor that types the sentence in step one also reads this. That's the point.
+        Every step of this tour used the same editor and the same handful of keys.</p>
+    </details>
+  </section>
+</template>
+
+<script src="site.js"></script>
+<script>
+  const sections = [...document.getElementById('steps').content.querySelectorAll('section')];
+  const steps = sections.filter((s) => s.dataset.hash !== '#kennedy');
+  const article = document.getElementById('step');
+  const progress = document.querySelector('.progress');
+  const iframe = document.querySelector('.stage iframe');
+  const docName = document.getElementById('doc-name');
+  const prev = document.getElementById('prev');
+  const next = document.getElementById('next');
+  const count = document.getElementById('count');
+  const seen = new Set();
+  let current = -1;
+
+  steps.forEach((_, i) => {
+    const a = document.createElement('a');
+    a.href = `#${i + 1}`;
+    a.setAttribute('aria-label', `Step ${i + 1}`);
+    progress.appendChild(a);
+  });
+
+  function load(hash, name) {
+    const url = editorUrl(hash);
+    if (iframe.getAttribute('src') === url) reloadFrame(iframe);
+    else iframe.src = url;
+    docName.textContent = name;
+  }
+
+  function show(index) {
+    index = Math.max(0, Math.min(steps.length - 1, index));
+    current = index;
+    seen.add(index);
+    const step = steps[index];
+    article.innerHTML = `<div class="step-num">Step ${index + 1} of ${steps.length}</div>` + step.innerHTML;
+    [...progress.children].forEach((a, i) => {
+      a.toggleAttribute('aria-current', i === index);
+      if (i === index) a.setAttribute('aria-current', 'step');
+      a.classList.toggle('seen', seen.has(i) && i !== index);
+    });
+    prev.disabled = index === 0;
+    next.textContent = index === steps.length - 1 ? 'Finish →' : 'Next →';
+    count.textContent = `${index + 1} / ${steps.length}`;
+    load(step.dataset.hash, step.dataset.name);
+    for (const link of article.querySelectorAll('[data-goto]')) {
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        load(link.dataset.goto, 'the Kennedy quote');
+      });
+    }
+    document.querySelector('.guide-body').scrollTop = 0;
+  }
+
+  function fromHash() {
+    const n = parseInt(location.hash.slice(1), 10);
+    show(Number.isFinite(n) ? n - 1 : 0);
+  }
+
+  prev.addEventListener('click', () => { location.hash = `#${current}`; });
+  next.addEventListener('click', () => {
+    if (current === steps.length - 1) location.href = './#unification';
+    else location.hash = `#${current + 2}`;
+  });
+  document.getElementById('reset').addEventListener('click', () => reloadFrame(iframe));
+  addEventListener('hashchange', fromHash);
+  fromHash();
+</script>
+</body>
+</html>
