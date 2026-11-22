@@ -1,7 +1,7 @@
-// Static file server for drafting the website locally. Node built-ins only.
-// Serves the repository root, so the site can embed the editor where it already
-// lives (../Fold Editor JS/) without copying it. "/" redirects to /website/.
-// Usage: node website/serve.mjs  ->  http://localhost:8090/
+// Static file server for working on the site locally. Node built-ins only.
+// Serves the repository root, laid out as GitHub Pages serves it, so the site is
+// at /fold/ here as it is at https://jiyuiydi.github.io/fold/. "/" redirects there.
+// Usage: node fold/serve.mjs  ->  http://localhost:8090/fold/
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -25,7 +25,7 @@ const TYPES = {
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
-  if (url.pathname === '/') { res.writeHead(302, { location: '/website/' }).end(); return; }
+  if (url.pathname === '/') { res.writeHead(302, { location: '/fold/' }).end(); return; }
   let path = join(ROOT, normalize(decodeURIComponent(url.pathname)));
   if (!path.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
   try {

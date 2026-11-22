@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fold — text that unfolds</title>
-<meta name="description" content="Fold is a binary document format with no text syntax, and an editor that makes it as easy to type as plain text. One medium for documents, data, spreadsheets, programs and interfaces.">
+<title>Fold — one medium for people and computers</title>
+<meta name="description" content="Fold is one binary medium for what people read and what computers process, with an editor that makes it as direct to write as a note. One medium for documents, data, spreadsheets, programs and interfaces.">
 <link rel="stylesheet" href="site.css">
 <link rel="icon" href="mark.svg" type="image/svg+xml">
 </head>
@@ -19,19 +19,20 @@
     <a href="#editor">The editor</a>
     <a href="#unification">What it replaces</a>
     <a href="#try">Try it</a>
-    <a href="#why">Why</a>
+    <a href="#divide">Why</a>
     <a href="#about">About</a>
   </nav>
 </header>
 
 <main>
   <div class="wrap hero">
-    <h1>Text that unfolds.</h1>
+    <h1>The missing common denominator between people and computers.</h1>
     <p class="lede">
-      Fold is a binary document format with no text syntax, and an editor that makes it as easy
-      to type as plain text. <strong>The same medium is a document, a web page, a spreadsheet, a
-      program and a file browser</strong>. It doesn't imitate each one. Underneath, they were
-      always the same thing.
+      What people read is encoded one way, and what computers work on is encoded another, with
+      converters running between them everywhere. Fold is one binary medium for both, and an
+      editor that makes it as direct to write as a note. <strong>The same medium is a document, a
+      web page, a spreadsheet, a program and a file browser</strong>. It doesn't imitate each one.
+      Underneath, they were always the same thing.
     </p>
     <div class="hero-actions">
       <a class="button" href="tour.html">Try it in your browser <span aria-hidden="true">→</span></a>
@@ -49,6 +50,239 @@
       </figcaption>
     </figure>
   </div>
+
+  <section id="divide">
+    <div class="wrap">
+      <div class="kicker">Two kinds of syntax</div>
+      <h2>People were given the typewriter. Machines kept the memory map.</h2>
+      <div class="syntaxes">
+        <figure class="syntax">
+          <div class="syntax-art"><img src="img/teletype.webp" width="477" height="495" loading="lazy"
+            alt="A 1970s advertisement: a woman sits beside a teletype terminal under the headline “This is a computer?”"></div>
+          <figcaption>
+            <h3>Qualitative syntax</h3>
+            <p>
+              Reserved symbols mark the structure. A sentence runs to a period, a string to a
+              quote, a block to its closing brace. To find where anything ends, every character
+              before it has to be read, and every reserved symbol needs an escape when it means
+              itself.
+            </p>
+            <p>
+              It's what a teletype could print, so it's still what every format meant for people
+              is made of: source code, HTML, JSON, the command line.
+            </p>
+          </figcaption>
+        </figure>
+        <figure class="syntax">
+          <div class="syntax-art"><img src="img/memory-map.webp" width="2000" height="1041" loading="lazy"
+            alt="A memory profiler's map of a process's address space: rows of coloured blocks of every size, packed side by side, with free gaps between them."></div>
+          <figcaption>
+            <h3>Quantitative syntax</h3>
+            <p>
+              Lengths and offsets come first. A reader can jump straight past anything without
+              reading it, and nothing ever needs escaping. Every CPU, file system and heap
+              organises data this way.
+            </p>
+            <p>
+              But every edit has to update the lengths around it, and no typewriter could do that,
+              so people were never given it to write with.
+            </p>
+          </figcaption>
+        </figure>
+      </div>
+
+      <figure class="diagram">
+        <div class="diagram-scroll">
+          <svg class="dg dg-fox" viewBox="0 0 760 250" role="img"
+            aria-labelledby="fox-title">
+            <title id="fox-title">The same four words two ways. Above, a separator byte follows each word. Below, a one-byte length comes before each word. Both lines are the same size.</title>
+            <defs>
+              <marker id="ah-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+            </defs>
+            <g class="sep">
+              <rect x="236" y="36" width="22" height="48"/><rect x="368" y="36" width="22" height="48"/>
+              <rect x="500" y="36" width="22" height="48"/><rect x="588" y="36" width="22" height="48"/>
+            </g>
+            <g class="mono word">
+              <text x="170" y="72" textLength="66" lengthAdjust="spacingAndGlyphs">The</text>
+              <text x="258" y="72" textLength="110" lengthAdjust="spacingAndGlyphs">quick</text>
+              <text x="390" y="72" textLength="110" lengthAdjust="spacingAndGlyphs">brown</text>
+              <text x="522" y="72" textLength="66" lengthAdjust="spacingAndGlyphs">fox</text>
+              <text x="622" y="72">…</text>
+            </g>
+            <g class="len">
+              <rect x="170" y="166" width="22" height="48"/><rect x="258" y="166" width="22" height="48"/>
+              <rect x="390" y="166" width="22" height="48"/><rect x="522" y="166" width="22" height="48"/>
+            </g>
+            <g class="len-text">
+              <text x="174" y="182">s</text><text x="185" y="210">3</text>
+              <text x="262" y="182">s</text><text x="273" y="210">5</text>
+              <text x="394" y="182">s</text><text x="405" y="210">5</text>
+              <text x="526" y="182">s</text><text x="537" y="210">3</text>
+            </g>
+            <g class="mono word">
+              <text x="192" y="202" textLength="66" lengthAdjust="spacingAndGlyphs">The</text>
+              <text x="280" y="202" textLength="110" lengthAdjust="spacingAndGlyphs">quick</text>
+              <text x="412" y="202" textLength="110" lengthAdjust="spacingAndGlyphs">brown</text>
+              <text x="544" y="202" textLength="66" lengthAdjust="spacingAndGlyphs">fox</text>
+              <text x="622" y="202">…</text>
+            </g>
+            <text class="note" x="385" y="138" text-anchor="middle">versus</text>
+            <text class="note" x="705" y="146" text-anchor="middle">1 byte</text>
+            <path class="pointer" d="M690,128 L606,92" marker-end="url(#ah-muted)"/>
+            <text class="note" x="62" y="146" text-anchor="middle">1 byte</text>
+            <path class="pointer" d="M90,152 L170,170" marker-end="url(#ah-muted)"/>
+          </svg>
+        </div>
+        <figcaption>
+          <strong>The same sentence, the same size. Worlds apart.</strong> A separator after each
+          word costs one byte, and so does a length before it. But only with lengths can a reader
+          skip past anything, a word or a whole subtree, without reading it, and only with lengths
+          can arbitrary data be nested inside without being altered by escape sequences.
+        </figcaption>
+      </figure>
+
+      <figure class="diagram">
+        <div class="diagram-scroll">
+          <svg class="dg dg-worlds" viewBox="0 0 960 545" role="img" aria-labelledby="worlds-title">
+            <title id="worlds-title">Two worlds. Structured by quantities: binary runtime encodings, optimized in place, marshalled to and unmarshalled from binary serialized formats such as ASN.1, Thrift, Protocol Buffers, MessagePack, HDF5 and EBML. Structured by tokens: ASCII and UTF-8, underneath HTML, HTTP, JSON, XML, CSV and source code. Text is parsed into the binary world and rendered back out of it. Even Protocol Buffers keeps its schemas and debug output as text.</title>
+            <defs>
+              <marker id="ah-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path class="ah-q" d="M0,0 L10,5 L0,10 z"/></marker>
+              <marker id="ah-t" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path class="ah-t" d="M0,0 L10,5 L0,10 z"/></marker>
+            </defs>
+            <text class="title" x="245" y="50" text-anchor="middle">Structured by <tspan class="strong">quantities</tspan></text>
+            <text class="title" x="715" y="50" text-anchor="middle">Structured by <tspan class="strong">tokens</tspan></text>
+            <line class="divider" x1="480" y1="78" x2="480" y2="530"/>
+
+            <rect class="q-box" x="150" y="120" width="190" height="130" rx="4"/>
+            <text class="box-head" x="245" y="180" text-anchor="middle">Binary</text>
+            <text class="box-sub" x="245" y="206" text-anchor="middle">runtime encoding</text>
+            <path class="q-line" d="M148,212 C70,252 48,122 142,162" marker-end="url(#ah-q)"/>
+            <text class="lbl" x="98" y="192" text-anchor="middle">optimize</text>
+
+            <rect class="q-box" x="150" y="390" width="190" height="130" rx="4"/>
+            <text class="box-head" x="245" y="450" text-anchor="middle">Binary</text>
+            <text class="box-sub" x="245" y="476" text-anchor="middle">serialized</text>
+            <path class="q-line dash" d="M148,482 C70,522 48,392 142,432" marker-end="url(#ah-q)"/>
+            <text class="lbl" x="98" y="462" text-anchor="middle">transfer</text>
+
+            <path class="q-line" d="M205,386 C176,340 176,300 205,256" marker-end="url(#ah-q)"/>
+            <text class="lbl" x="168" y="326" text-anchor="end">unmarshall</text>
+            <path class="q-line" d="M285,256 C314,300 314,340 285,386" marker-end="url(#ah-q)"/>
+            <text class="lbl" x="322" y="326">marshall</text>
+
+            <g class="formats q-text">
+              <text x="356" y="402">ASN.1</text><text x="356" y="425">Thrift</text>
+              <text x="356" y="448">Protocol Buffers</text><text x="356" y="471">MessagePack</text>
+              <text x="356" y="494">HDF5</text><text x="356" y="517">EBML</text>
+            </g>
+
+            <path class="t-box" d="M715,112 L812,258 L618,258 Z"/>
+            <text class="box-head" x="715" y="210" text-anchor="middle">ASCII</text>
+            <text class="box-head" x="715" y="238" text-anchor="middle">UTF-8</text>
+            <path class="t-line dash" d="M772,168 C858,128 884,262 800,236" marker-end="url(#ah-t)"/>
+            <text class="lbl" x="842" y="204" text-anchor="middle">transfer</text>
+            <text class="formats t-text" x="715" y="290" text-anchor="middle">HTML · HTTP · JSON · XML · CSV · source code</text>
+
+            <path class="q-line" d="M604,176 C530,118 438,118 358,170" marker-end="url(#ah-q)"/>
+            <text class="lbl" x="480" y="132" text-anchor="middle">parse</text>
+            <path class="t-line" d="M358,214 C438,266 530,266 604,214" marker-end="url(#ah-t)"/>
+            <text class="lbl" x="480" y="266" text-anchor="middle">render</text>
+
+            <path class="q-line" d="M560,436 C530,434 512,438 484,443" marker-end="url(#ah-q)"/>
+            <text class="t-text" x="568" y="441">Protocol Buffers schemas (.proto)</text>
+            <path class="t-line" d="M484,452 C512,460 532,468 560,470" marker-end="url(#ah-t)"/>
+            <text class="t-text" x="568" y="476">Protocol Buffers debug strings</text>
+          </svg>
+        </div>
+        <figcaption>
+          <strong>Two worlds, converting constantly.</strong> Programs work in quantities and people
+          work in tokens, so data is parsed on the way in and rendered on the way out, and every
+          format picks a side. Even a binary format keeps text on the side for the people who
+          have to read it.
+        </figcaption>
+      </figure>
+
+      <div class="one-world">
+        <div class="narrow bridge">
+          <p>
+            <strong>An editor that keeps the lengths right on every keystroke is the machinery
+            quantitative syntax was missing.</strong> With it, one encoding can be random-access for
+            the machine and directly writable by a person.
+          </p>
+          <p>
+            Then there's only one world. Parsing, rendering and optimizing stop being conversions
+            between formats. Each is just another edit, from Fold to Fold.
+          </p>
+        </div>
+        <figure class="diagram">
+          <svg class="dg dg-fold" viewBox="0 0 420 350" role="img" aria-labelledby="fold-title">
+            <title id="fold-title">Fold, with parse, render and optimize each drawn as an arrow that leaves Fold and comes back to it.</title>
+            <defs>
+              <marker id="ah-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path class="ah-f" d="M0,0 L10,5 L0,10 z"/></marker>
+            </defs>
+            <circle class="f-box" cx="210" cy="175" r="88"/>
+            <text class="fold-name" x="210" y="188" text-anchor="middle">Fold</text>
+            <path class="f-line" d="M122,160 C52,146 70,48 152,96" marker-end="url(#ah-f)"/>
+            <text class="lbl" x="98" y="112" text-anchor="middle">parse</text>
+            <path class="f-line" d="M268,96 C350,48 368,146 298,160" marker-end="url(#ah-f)"/>
+            <text class="lbl" x="322" y="112" text-anchor="middle">render</text>
+            <path class="f-line" d="M240,258 C276,336 144,336 180,260" marker-end="url(#ah-f)"/>
+            <text class="lbl" x="210" y="316" text-anchor="middle">optimize</text>
+          </svg>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="media">
+    <div class="wrap">
+      <div class="kicker">No common denominator</div>
+      <h2>Every medium has some of what's needed. None has all of it.</h2>
+      <p class="narrow">
+        Each format below was made for one job, and each picked up a few of these properties to do
+        it. Moving information between them means losing whatever the destination lacks.
+      </p>
+      <div class="matrix-scroll" tabindex="0" role="region" aria-label="Properties of media, compared">
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th scope="col"><span class="sr">Medium</span></th>
+              <th scope="col">Tree structure</th>
+              <th scope="col">Graph structure</th>
+              <th scope="col">Computation</th>
+              <th scope="col">Metadata</th>
+              <th scope="col">Meta-metadata</th>
+              <th scope="col">Rich styling</th>
+              <th scope="col">De-duplication</th>
+              <th scope="col">Binary encoding</th>
+              <th scope="col">Arbitrary embedding</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Ink on paper</th><td>~</td><td>~</td><td></td><td>~</td><td></td><td>✓</td><td></td><td></td><td>~</td></tr>
+            <tr><th scope="row">Typewriter</th><td>~</td><td></td><td></td><td></td><td></td><td>~</td><td></td><td></td><td></td></tr>
+            <tr><th scope="row">Plain text</th><td>~</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+            <tr><th scope="row">Rich text</th><td>~</td><td>~</td><td>~</td><td>~</td><td></td><td>✓</td><td>~</td><td></td><td>✓</td></tr>
+            <tr><th scope="row">Markdown</th><td>~</td><td>~</td><td></td><td>~</td><td></td><td>~</td><td>~</td><td></td><td>~</td></tr>
+            <tr><th scope="row">XML</th><td>✓</td><td>~</td><td></td><td>✓</td><td></td><td>~</td><td>~</td><td></td><td>~</td></tr>
+            <tr><th scope="row">HTML</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td><td>✓</td><td>~</td><td></td><td>✓</td></tr>
+            <tr><th scope="row">Word document</th><td>~</td><td>~</td><td>~</td><td>✓</td><td></td><td>✓</td><td>~</td><td>~</td><td>✓</td></tr>
+            <tr><th scope="row">Spreadsheet</th><td></td><td>✓</td><td>✓</td><td>~</td><td></td><td>✓</td><td>~</td><td>~</td><td>~</td></tr>
+            <tr><th scope="row">JSON</th><td>✓</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+            <tr><th scope="row">Protocol Buffers</th><td>✓</td><td></td><td></td><td>~</td><td></td><td></td><td></td><td>✓</td><td>✓</td></tr>
+            <tr><th scope="row">Zip</th><td>✓</td><td></td><td></td><td>~</td><td></td><td></td><td>~</td><td>✓</td><td>✓</td></tr>
+            <tr class="fold-row"><th scope="row">Fold</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="caption narrow">
+        ✓ built in. ~ by convention, partly, or only in a companion format: a reference by
+        footnote, Markdown's front matter, XML's IDs and entities, a stylesheet beside the data, a
+        Word file that is zipped XML. A blank means it isn't there.
+      </p>
+    </div>
+  </section>
 
   <section id="editor">
     <div class="wrap">
@@ -184,38 +418,16 @@
     </div>
   </section>
 
-  <section id="why">
+  <section id="primitives">
     <div class="wrap">
-      <div class="kicker">Why</div>
-      <h2>Human-readable was a typewriter constraint.</h2>
-      <div class="two-col">
-        <div>
-          <p>
-            Early computers talked to people through teletypes, so printable characters became the
-            only building blocks of anything a person was meant to read: source code, config,
-            HTML, JSON, the command line. Every CPU and data structure, meanwhile, uses lengths
-            and offsets, because they allow random access. Computing pays permanently to convert
-            between the two.
-          </p>
-          <p>
-            Text marks structure with reserved characters, so every byte has to be scanned and
-            every reserved character needs an escape. Length-prefixed binary has neither problem,
-            but its lengths have to be kept in sync with every edit, which no typewriter could do.
-          </p>
-        </div>
-        <div>
-          <p>
-            <strong>A smart editor is exactly that missing machinery.</strong> An editor that
-            updates lengths on every keystroke makes a binary, random-access encoding writable
-            by a person, in a text field, as fast as they can type.
-          </p>
-          <p>
-            Nothing about UTF-8 is readable as bits either. It's readable because a text editor is
-            installed everywhere. The bar for a successor isn't legibility. It's being worth
-            installing everywhere, which means first being exactly as good as text at being text.
-          </p>
-        </div>
-      </div>
+      <div class="kicker">What the format adds</div>
+      <h2>Readable because the editor is everywhere, not because of the bits.</h2>
+      <p class="narrow">
+        Nothing about UTF-8 is readable as bits either. It's readable because a text editor is
+        installed everywhere. The bar for a successor isn't legibility. It's being worth installing
+        everywhere, which means first being exactly as good as text at being text, and then adding
+        what text never had. Three base types do that, and no other format has them.
+      </p>
 
       <div class="grid3">
         <div class="card">
@@ -265,7 +477,7 @@
       <p class="narrow">
         Every design decision is written down with the argument behind it. The manifesto says
         which decisions are settled, which are open, and what would prove the project wrong.
-        <a href="../Manifesto/MANIFESTO.md">Read the manifesto</a>.
+        <a href="manifesto.html">Read the manifesto</a>.
       </p>
     </div>
   </section>

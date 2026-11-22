@@ -10,6 +10,10 @@
   --accent-ink: #ffffff;
   --kbd-bg: #ffffff;
   --kbd-edge: #c9c3b6;
+  --quant: #557336;
+  --quant-bg: #e4e9d6;
+  --token: #3a6890;
+  --token-bg: #dbe5ee;
   --shadow: 0 1px 2px rgba(30, 25, 15, .06), 0 8px 24px rgba(30, 25, 15, .08);
   --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -28,6 +32,10 @@
     --accent-ink: #1a1009;
     --kbd-bg: #2a2925;
     --kbd-edge: #4a463f;
+    --quant: #9dbb70;
+    --quant-bg: #283020;
+    --token: #89b0d4;
+    --token-bg: #1d2934;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);
     color-scheme: dark;
   }
@@ -254,4 +262,95 @@ ul.plain li { margin-bottom: .55em; }
   .collapse td:first-child { width: auto; }
   .collapse td:last-child { width: auto; }
   section { padding: 44px 0; }
+}
+
+/* Two kinds of syntax: the teletype and the memory map, side by side. */
+.syntaxes { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin: 28px 0 32px; }
+.syntax { margin: 0; display: flex; flex-direction: column; }
+.syntax-art {
+  aspect-ratio: 4 / 3;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #2b2b2b;
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow);
+}
+.syntax-art img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.syntax:first-child .syntax-art img { object-position: 50% 20%; }
+.syntax:last-child .syntax-art img { object-position: 0 50%; }
+.syntax figcaption { margin-top: 18px; }
+.syntax figcaption p { color: var(--muted); font-size: .97rem; }
+.bridge { font-size: 1.12rem; }
+
+/* The comparison across media. */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.matrix-scroll { overflow-x: auto; margin-top: 24px; -webkit-overflow-scrolling: touch; }
+.matrix { border-collapse: collapse; min-width: 760px; width: 100%; font-size: .95rem; }
+.matrix th, .matrix td { padding: 9px 8px; border-bottom: 1px solid var(--rule); }
+.matrix thead th {
+  font: 600 .74rem/1.25 var(--sans);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: center;
+  vertical-align: bottom;
+  width: 9%;
+}
+.matrix tbody th { text-align: left; font-weight: 500; white-space: nowrap; padding-left: 0; }
+.matrix tbody th, .matrix thead th:first-child {
+  position: sticky; left: 0; background: var(--bg); z-index: 1; padding-right: 16px;
+}
+.matrix td { text-align: center; color: var(--ink); font-size: 1.1rem; }
+.matrix td:empty::after { content: "·"; opacity: .35; }
+.matrix .fold-row th, .matrix .fold-row td { color: var(--accent); font-weight: 700; border-bottom: none; }
+.matrix .fold-row th, .matrix .fold-row td { background: color-mix(in srgb, var(--accent) 9%, var(--bg)); }
+
+@media (max-width: 760px) {
+  .syntaxes { grid-template-columns: 1fr; }
+}
+
+/* Diagrams, redrawn from the dissertation's slides in the site's colours. */
+.diagram { margin: 36px 0; }
+.diagram figcaption { margin-top: 12px; color: var(--muted); font-size: .97rem; max-width: 46em; }
+.diagram figcaption strong { color: var(--ink); }
+.diagram-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.dg { display: block; width: 100%; height: auto; font-family: var(--sans); }
+.dg-fox { max-width: 760px; min-width: 520px; }
+.dg-worlds { min-width: 640px; }
+.dg text { fill: var(--ink); font-size: 16px; }
+.dg .lbl { paint-order: stroke; stroke: var(--bg); stroke-width: 7px; stroke-linejoin: round; }
+.dg .title { font: 400 26px var(--serif); }
+.dg .strong { font-weight: 700; }
+.dg .box-head { font-size: 24px; font-weight: 700; }
+.dg .box-sub { font-size: 17px; }
+.dg .formats { font-size: 16px; }
+.dg .q-text { fill: var(--quant); }
+.dg .t-text { fill: var(--token); }
+.dg .q-box { fill: var(--quant-bg); stroke: var(--quant); stroke-width: 1.5; }
+.dg .t-box { fill: var(--token-bg); stroke: var(--token); stroke-width: 1.5; stroke-linejoin: round; }
+.dg .f-box { fill: color-mix(in srgb, var(--accent) 12%, var(--bg)); stroke: var(--accent); stroke-width: 2; }
+.dg :is(.q-line, .t-line, .f-line, .pointer) { fill: none; stroke-width: 2.2; stroke-linecap: round; }
+.dg .q-line { stroke: var(--quant); }
+.dg .t-line { stroke: var(--token); }
+.dg .f-line { stroke: var(--accent); }
+.dg .pointer { stroke: var(--muted); stroke-width: 1.6; }
+.dg .dash { stroke-dasharray: 7 6; }
+.dg .divider { stroke: var(--rule); stroke-width: 3; stroke-dasharray: 12 10; }
+.dg .ah-q { fill: var(--quant); }
+.dg .ah-t { fill: var(--token); }
+.dg .ah-f { fill: var(--accent); }
+.dg .ah-muted { fill: var(--muted); }
+.dg .mono { font-family: var(--mono); }
+.dg .word text { font-size: 36px; }
+.dg .sep rect { fill: var(--token-bg); stroke: var(--token); stroke-width: 1; }
+.dg .len rect { fill: var(--quant-bg); stroke: var(--quant); stroke-width: 1; }
+.dg .len-text text { fill: var(--quant); font-family: var(--mono); font-size: 13px; font-weight: 700; }
+.dg .len-text text:nth-child(even) { font-size: 16px; }
+.dg .note { fill: var(--muted); font-size: 17px; }
+.dg .fold-name { font: 700 40px var(--serif); fill: var(--accent); }
+.one-world { display: grid; grid-template-columns: 1fr 340px; gap: 32px; align-items: center; margin-top: 8px; }
+.one-world .diagram { margin: 0; }
+@media (max-width: 760px) {
+  .one-world { grid-template-columns: 1fr; }
+  .one-world .diagram { max-width: 340px; margin: 0 auto; }
 }

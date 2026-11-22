@@ -1,9 +1,6 @@
 // Shared by index.html and tour.html.
 
-// Where the editor lives, relative to this page. While drafting, the site is
-// served from the repository root (website/serve.mjs), so this is the editor's
-// own folder. When the site is hosted, copy the editor's index.html and build/
-// in beside the site and change this one line.
+// Where the editor lives, relative to this page: the copy in editor-js/ (see README.md).
 const EDITOR = './editor-js/index.html';
 
 function editorUrl(hash) {
