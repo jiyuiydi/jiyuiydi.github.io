@@ -4,7 +4,7 @@
 // served from the repository root (website/serve.mjs), so this is the editor's
 // own folder. When the site is hosted, copy the editor's index.html and build/
 // in beside the site and change this one line.
-const EDITOR = '../Fold%20Editor%20JS/index.html';
+const EDITOR = './editor-js/index.html';
 
 function editorUrl(hash) {
   return EDITOR + (hash || '');

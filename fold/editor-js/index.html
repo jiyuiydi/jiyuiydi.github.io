@@ -1,0 +1,280 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fold Editor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Fold owns layout. This stylesheet establishes the page and the type
+     ramp and then gets out of the way: no CSS may position, space or wrap
+     a Fold element, or SPECIFICATION section 6.1 argues in a circle.
+     See docs/ARCHITECTURE.md, "fold-view". */
+  html { color-scheme: light dark; }
+  body { margin: 0; padding: 24px; font: 16px/1.4 system-ui, sans-serif; }
+  #fold-root, .fold-surface { position: relative; }
+  :is(#fold-root, .fold-surface) .glyph-run { position: absolute; white-space: pre; }
+
+  /* Structure is drawn, not spelled (MANIFESTO 3.4). Geometry comes from the
+     layout; this only says what a rule looks like. box-sizing is not an
+     exception to the rule above - it is what makes a 1px border land on the
+     rectangle the layout asked for instead of 2px outside it. */
+  :is(#fold-root, .fold-surface) .ornament {
+    position: absolute;
+    box-sizing: border-box;
+    pointer-events: none;
+    border-color: currentColor;
+  }
+  :is(#fold-root, .fold-surface) .ornament[data-ornament="overline"] { border-top: 1px solid; opacity: .3; }
+  :is(#fold-root, .fold-surface) .ornament[data-ornament="outline"] { border: 1px solid; opacity: .22; border-radius: 2px; }
+  /* A name: a sticker in markup's colour (the C++ editor's ID face). */
+  :is(#fold-root, .fold-surface) .ornament[data-ornament="sticker"] { background: rgb(150 110 220 / .16); border: 1px solid rgb(150 110 220 / .55); border-radius: 3px 8px 8px 3px; }
+  :is(#fold-root, .fold-surface) .ornament[data-ornament="dashed-outline"] { border: 1px dashed; opacity: .45; border-radius: 2px; }
+  :is(#fold-root, .fold-surface) .ornament[data-ornament="drop-shadow"] { box-shadow: 0 1px 4px rgba(0, 0, 0, .28); border-radius: 2px; }
+
+  /* Metadata, collapsed: a tick saying something is there. Not a disclosure
+     triangle - the way to open it is to move the cursor nearer, and an
+     affordance suggesting a click would teach the wrong gesture. */
+  :is(#fold-root, .fold-surface) .ornament[data-ornament="metadata-mark"] { border-top: 2px solid; opacity: .35; }
+
+  /* A pending Side-Effect: a button (SPECIFICATION 4.6). It is the one thing
+     on the page that answers a click by doing something rather than by moving
+     the cursor, so it is the one thing that looks pressable - and it looks
+     pressable here, in CSS, while where it is and how big it is come from the
+     layout like everything else. */
+  :is(#fold-root, .fold-surface) .ornament[data-ornament="button"] {
+    border: 1px solid;
+    border-radius: 3px;
+    opacity: .6;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    /* The one ornament that takes the pointer, so hovering its padding shows
+       it is pressable. A press still reaches the page's own handler, because
+       this element is inside #fold-root and the event bubbles there. */
+    pointer-events: auto;
+    cursor: pointer;
+  }
+  /* The label is part of the button, and must not show a text cursor. */
+  :is(#fold-root, .fold-surface) .glyph-run[data-pressable] { cursor: pointer; }
+
+  /* A swatch, and a Chroma-Hash's bands. The colour arrives from the layout
+     because it is data - three bytes are the colour they are, and no
+     stylesheet can know them. Everything else about it is here. */
+  :is(#fold-root, .fold-surface) .ornament[data-ornament="swatch"] {
+    border: 1px solid;
+    border-radius: 2px;
+    border-color: color-mix(in srgb, currentColor 25%, transparent);
+  }
+
+  /* A picture. The image itself arrives from the renderer, on the same terms
+     as a swatch's colour and for the same reason - it is the data. The box it
+     fills was sized from the picture's own header by the layout, so `contain`
+     is a guard against rounding rather than a sizing rule: nothing here is
+     deciding how big anything is, which it may not. */
+  :is(#fold-root, .fold-surface) .ornament[data-ornament="image"] {
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: contain;
+  }
+
+  /* The cursor. Two shapes, both placed by the layout: a bar between
+     characters, a rectangle around a focused node. What each one looks like is
+     here; where each one goes is not, and never will be. */
+  :is(#fold-root, .fold-surface) .caret {
+    position: absolute;
+    background: currentColor;
+    pointer-events: none;
+    animation: fold-blink 1.06s steps(1) infinite;
+  }
+  :is(#fold-root, .fold-surface) .element-cursor {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    opacity: .35;
+    pointer-events: none;
+  }
+  /* A value broken across lines: the sides where it carries on are open. */
+  :is(#fold-root, .fold-surface) .element-cursor[data-continues-before] {
+    border-left: none;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+  :is(#fold-root, .fold-surface) .element-cursor[data-continues-after] {
+    border-right: none;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  @keyframes fold-blink { 0%, 50% { opacity: 1 } 50.01%, 100% { opacity: 0 } }
+
+  /* The selection: one rectangle per selected node, or one over a range of
+     characters. Painted behind the glyphs by being first in the document
+     rather than by a z-index, which is the renderer's business - like every
+     other rule here this one says what, never where.
+
+     currentColor rather than a blue, for the same reason the ornaments use it:
+     the page has no palette of its own and inherits the reader's. */
+  /* `background-color` from a node's CSS metadata: one layer, behind
+     everything the document draws, holding a rectangle per painted box. */
+  :is(#fold-root, .fold-surface) .backdrops { position: absolute; inset: 0; pointer-events: none; }
+  :is(#fold-root, .fold-surface) .backdrop {
+    position: absolute;
+    border-radius: 2px;
+    pointer-events: none;
+  }
+  :is(#fold-root, .fold-surface) .selection {
+    position: absolute;
+    background: color-mix(in srgb, currentColor 16%, transparent);
+    border-radius: 2px;
+    pointer-events: none;
+  }
+
+  /* The context menu. Chrome, and allowed to be: the no-chrome rule is scoped
+     to the plain-text case (docs/DECISIONS.md, 2026-09-08), and nobody typing
+     a sentence right-clicks it. Note what this means for the rule above - the
+     menu is positioned by CSS, which a Fold element may never be, because a
+     menu is not part of the document. It is not encoded, not addressable by a
+     cursor, and not laid out; drawing it through the layout would say it was.
+
+     Minimal by taste rather than by prohibition, so: a rectangle, a rule
+     between nothing, and the reader's own colours. */
+  .fold-menu {
+    position: fixed;
+    z-index: 10;
+    min-width: 13rem;
+    padding: 4px 0;
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    border-radius: 5px;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .22);
+    font: 13px/1.5 system-ui, sans-serif;
+    user-select: none;
+  }
+
+  .fold-menu-item {
+    position: relative;
+    display: flex;
+    gap: 1.5rem;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 3px 12px 3px 22px;
+    white-space: nowrap;
+  }
+  .fold-menu-item:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+  .fold-menu-item[aria-disabled="true"] { opacity: .38; }
+  .fold-menu-item[aria-disabled="true"]:hover { background: none; }
+
+  /* The face in effect. A tick in the gutter the padding above reserves, so
+     that checking and unchecking an entry does not move the labels. */
+  .fold-menu-item[data-checked="true"]::before {
+    content: "\2713";
+    position: absolute;
+    left: 7px;
+  }
+
+  /* Which way the shortcut reads: quieter than the label, and never wrapping
+     under it. The menu's second job is teaching keys, so the key has to be
+     legible - it does not have to compete. */
+  .fold-menu-key { opacity: .5; font-size: .92em; }
+  /* The page's own entries, after the editor's. */
+  .fold-menu-item[data-separated="true"] { border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent); margin-top: 3px; padding-top: 6px; }
+
+  .fold-menu-item[data-submenu="true"]::after { content: "\203A"; opacity: .55; }
+  .fold-submenu {
+    display: none;
+    position: absolute;
+    left: 100%;
+    top: -5px;
+  }
+  .fold-menu-item[data-submenu="true"]:hover > .fold-submenu { display: block; }
+
+  /* Where typed and composed text arrives. Invisible, focused, and moved to
+     the caret so an IME's candidate window opens beside the words it is
+     composing rather than in the corner of the page. */
+  #fold-input {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 1px;
+    height: 1em;
+    padding: 0;
+    border: 0;
+    outline: 0;
+    resize: none;
+    overflow: hidden;
+    opacity: 0;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+  }
+</style>
+
+<div id="fold-root"></div>
+
+<script>
+  /* Why this is here, and why it is not a bundler.
+   *
+   * The page has to open by double-clicking it - no server, no install step
+   * beyond `tsc`. That rules out `<script type="module">`, because a browser
+   * fetches every ES module over the network stack and a file:// page has the
+   * opaque origin "null", so every import is refused by CORS before it is
+   * read. A classic script has no such check, and a classic script can only be
+   * one file.
+   *
+   * So the browser build is `tsc --outFile`, which concatenates the module
+   * graph into one file and wraps each module in a `define(name, deps,
+   * factory)` call, naming them by their path under src/ with the extension
+   * dropped. `define` here only records the factory; nothing runs until the
+   * entry point is pulled, and each module's dependencies are pulled first.
+   *
+   * Registering rather than executing is not caution, it is required. tsc
+   * orders an outFile by the import graph *before* type-only imports are
+   * erased, and data/data.ts imports two types from data/containers.ts - so
+   * the file order contains a cycle that the runtime graph does not, and
+   * data/leaves is emitted before the data/data it depends on. Pulling
+   * dependencies on demand makes the emitted order irrelevant.
+   *
+   * The `node --test` build is unchanged and is still one ES module per file.
+   * This affects how the browser is handed the code and nothing else - there is
+   * no second source tree, no bundler config, and no transform beyond the one
+   * tsc was already doing.
+   */
+  var __foldFactories = Object.create(null);
+  var __foldModules = Object.create(null);
+
+  function define(name, dependencies, factory) {
+    __foldFactories[name] = { dependencies: dependencies, factory: factory };
+  }
+  define.amd = true;
+
+  function __foldRequire(name) {
+    if (name in __foldModules) return __foldModules[name];
+    var entry = __foldFactories[name];
+    if (entry === undefined) throw new Error('fold: no module "' + name + '"');
+
+    var exports = {};
+    // Published before the factory runs, so a genuine cycle would see a
+    // partly-filled exports object rather than recurse - the same contract ES
+    // modules give.
+    __foldModules[name] = exports;
+    entry.factory.apply(this, entry.dependencies.map(function (dependency) {
+      if (dependency === 'exports') return exports;
+      if (dependency === 'require') return __foldRequire;
+      return __foldRequire(resolve(name, dependency));
+    }));
+    return exports;
+  }
+
+  /* tsc already emits fully-resolved names here. The relative and .js cases are
+     belt and braces against a future emit that does not. */
+  function resolve(from, specifier) {
+    var name = specifier.replace(/\.js$/, '');
+    if (name.charAt(0) !== '.') return name;
+    var parts = from.split('/').slice(0, -1);
+    name.split('/').forEach(function (segment) {
+      if (segment === '.') return;
+      if (segment === '..') parts.pop();
+      else parts.push(segment);
+    });
+    return parts.join('/');
+  }
+</script>
+<script src="./fold.js"></script>
+<script>__foldRequire('app/main');</script>
