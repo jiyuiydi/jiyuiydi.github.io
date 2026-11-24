@@ -266,7 +266,8 @@
             <tr><th scope="row">Rich text</th><td>~</td><td>~</td><td>~</td><td>~</td><td></td><td>✓</td><td>~</td><td></td><td>✓</td></tr>
             <tr><th scope="row">Markdown</th><td>~</td><td>~</td><td></td><td>~</td><td></td><td>~</td><td>~</td><td></td><td>~</td></tr>
             <tr><th scope="row">XML</th><td>✓</td><td>~</td><td></td><td>✓</td><td></td><td>~</td><td>~</td><td></td><td>~</td></tr>
-            <tr><th scope="row">HTML</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td><td>✓</td><td>~</td><td></td><td>✓</td></tr>
+            <tr><th scope="row">HTML</th><td>✓</td><td>✓</td><td>~</td><td>✓</td><td></td><td>~</td><td>~</td><td></td><td>~</td></tr>
+            <tr><th scope="row">Webpage</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td><td>✓</td><td>~</td><td>~</td><td>✓</td></tr>
             <tr><th scope="row">Word document</th><td>~</td><td>~</td><td>~</td><td>✓</td><td></td><td>✓</td><td>~</td><td>~</td><td>✓</td></tr>
             <tr><th scope="row">Spreadsheet</th><td></td><td>✓</td><td>✓</td><td>~</td><td></td><td>✓</td><td>~</td><td>~</td><td>~</td></tr>
             <tr><th scope="row">JSON</th><td>✓</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
@@ -277,9 +278,11 @@
         </table>
       </div>
       <p class="caption narrow">
+        Each medium is judged in the form it's authored in, not the form it renders to: HTML is one text file, while a webpage is
+        that file plus the stylesheets, scripts and images served beside it.
         ✓ built in. ~ by convention, partly, or only in a companion format: a reference by
-        footnote, Markdown's front matter, XML's IDs and entities, a stylesheet beside the data, a
-        Word file that is zipped XML. A blank means it isn't there.
+        footnote, Markdown's front matter, XML's IDs and entities, HTML's scripts and stylesheets,
+        an image spelled out as base64 text, a Word file that is zipped XML. A blank means it isn't there.
       </p>
     </div>
   </section>
