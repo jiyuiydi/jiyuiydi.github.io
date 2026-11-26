@@ -26,7 +26,8 @@
 
 <main>
   <div class="wrap hero">
-    <h1>The missing common denominator between people and computers.</h1>
+    <h1>The missing common denominator between people and computers:</h1>
+	<h2>a binary format you can author directly</h2>
     <p class="lede">
       What people read is encoded one way, and what computers work on is encoded another, with
       converters running between them everywhere. <strong>Fold</strong> is one binary medium for both, and an
@@ -34,6 +35,31 @@
       web page, a spreadsheet, a program, and a file browser</strong>. It doesn't imitate each one.
       Underneath, they were always the same thing.
     </p>
+    <div class="lede features">
+      <p>Major distinguishing features:</p>
+      <ul class="plain">
+        <li>recursive metadata for layering in semantics</li>
+        <li>memory fragmentation for high performance runtime mutation</li>
+        <li>references <em>are</em> programs for integration and edit-oriented-programming</li>
+        <li>side effects are controlled by default</li>
+      </ul>
+    </div>
+    <figure class="gem" id="gem">
+      <figcaption class="gem-title">It doesn't take many ingredients in the encoding layer for the full range of use cases to emerge, but it does take the right ones.</figcaption>
+      <button class="gem-stage" type="button" aria-label="Turn the gem to another face">
+        <canvas aria-hidden="true"></canvas>
+      </button>
+      <ul class="gem-list">
+        <li>text editor</li>
+        <li>transfer format</li>
+        <li>formatted document</li>
+        <li>interactive website</li>
+        <li>spreadsheet</li>
+        <li>runtime heap memory</li>
+        <li>graph data structure</li>
+        <li>source code w/ embedded interactive documentation</li>
+      </ul>
+    </figure>
     <div class="hero-actions">
       <a class="button" href="tour.html">Try it in your browser <span aria-hidden="true">→</span></a>
       <a class="button ghost" href="#video">Watch 90 seconds</a>
@@ -257,23 +283,32 @@
               <th scope="col">De-duplication</th>
               <th scope="col">Binary encoding</th>
               <th scope="col">Arbitrary embedding</th>
+              <th scope="col">Random access</th>
+              <th scope="col">Fragmentation</th>
+              <th scope="col">Direct authoring</th>
             </tr>
           </thead>
           <tbody>
-            <tr><th scope="row">Ink on paper</th><td>~</td><td>~</td><td></td><td>~</td><td></td><td>✓</td><td></td><td></td><td>~</td></tr>
-            <tr><th scope="row">Typewriter</th><td>~</td><td></td><td></td><td></td><td></td><td>~</td><td></td><td></td><td></td></tr>
-            <tr><th scope="row">Plain text</th><td>~</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
-            <tr><th scope="row">Rich text</th><td>~</td><td>~</td><td>~</td><td>~</td><td></td><td>✓</td><td>~</td><td></td><td>✓</td></tr>
-            <tr><th scope="row">Markdown</th><td>~</td><td>~</td><td></td><td>~</td><td></td><td>~</td><td>~</td><td></td><td>~</td></tr>
-            <tr><th scope="row">XML</th><td>✓</td><td>~</td><td></td><td>✓</td><td></td><td>~</td><td>~</td><td></td><td>~</td></tr>
-            <tr><th scope="row">HTML</th><td>✓</td><td>✓</td><td>~</td><td>✓</td><td></td><td>~</td><td>~</td><td></td><td>~</td></tr>
-            <tr><th scope="row">Webpage</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td><td>✓</td><td>~</td><td>~</td><td>✓</td></tr>
-            <tr><th scope="row">Word document</th><td>~</td><td>~</td><td>~</td><td>✓</td><td></td><td>✓</td><td>~</td><td>~</td><td>✓</td></tr>
-            <tr><th scope="row">Spreadsheet</th><td></td><td>✓</td><td>✓</td><td>~</td><td></td><td>✓</td><td>~</td><td>~</td><td>~</td></tr>
-            <tr><th scope="row">JSON</th><td>✓</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
-            <tr><th scope="row">Protocol Buffers</th><td>✓</td><td></td><td></td><td>~</td><td></td><td></td><td></td><td>✓</td><td>✓</td></tr>
-            <tr><th scope="row">Zip</th><td>✓</td><td></td><td></td><td>~</td><td></td><td></td><td>~</td><td>✓</td><td>✓</td></tr>
-            <tr class="fold-row"><th scope="row">Fold</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><th scope="row">Ink on paper</th><td>~</td><td>~</td><td></td><td>~</td><td></td><td>✓</td><td></td><td></td><td>~</td><td>✓</td><td>~</td><td>✓</td></tr>
+            <tr><th scope="row">Typewriter</th><td>~</td><td></td><td></td><td></td><td></td><td>~</td><td></td><td></td><td></td><td>✓</td><td></td><td>✓</td></tr>
+            <tr><th scope="row">Command-line terminal</th><td></td><td></td><td>✓</td><td>~</td><td></td><td>~</td><td></td><td></td><td>~</td><td>~</td><td></td><td>✓</td></tr>
+            <tr><th scope="row">Plain text</th><td>~</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>✓</td></tr>
+            <tr><th scope="row">Rich text</th><td>~</td><td>~</td><td>~</td><td>~</td><td></td><td>✓</td><td>~</td><td></td><td>✓</td><td></td><td></td><td>~</td></tr>
+            <tr><th scope="row">Markdown</th><td>~</td><td>~</td><td></td><td>~</td><td></td><td>~</td><td>~</td><td></td><td>~</td><td></td><td></td><td>✓</td></tr>
+            <tr><th scope="row">XML</th><td>✓</td><td>~</td><td></td><td>✓</td><td></td><td>~</td><td>~</td><td></td><td>~</td><td></td><td></td><td>✓</td></tr>
+            <tr><th scope="row">HTML</th><td>✓</td><td>✓</td><td>~</td><td>✓</td><td></td><td>~</td><td>~</td><td></td><td>~</td><td></td><td></td><td>✓</td></tr>
+            <tr><th scope="row">Webpage</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td><td>✓</td><td>~</td><td>~</td><td>✓</td><td>~</td><td></td><td>~</td></tr>
+            <tr><th scope="row">Word document</th><td>~</td><td>~</td><td>~</td><td>✓</td><td></td><td>✓</td><td>~</td><td>~</td><td>✓</td><td>~</td><td>~</td><td></td></tr>
+            <tr><th scope="row">Spreadsheet</th><td></td><td>✓</td><td>✓</td><td>~</td><td></td><td>✓</td><td>~</td><td>~</td><td>~</td><td>~</td><td>~</td><td>~</td></tr>
+            <tr><th scope="row">Notebook</th><td>✓</td><td></td><td>✓</td><td>✓</td><td></td><td>~</td><td>~</td><td></td><td>~</td><td></td><td></td><td>~</td></tr>
+            <tr><th scope="row">Database</th><td>~</td><td>✓</td><td>✓</td><td>~</td><td></td><td></td><td>~</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td></tr>
+            <tr><th scope="row">JSON</th><td>✓</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>✓</td></tr>
+            <tr><th scope="row">Source code</th><td>✓</td><td>~</td><td>✓</td><td>~</td><td></td><td></td><td>✓</td><td></td><td>~</td><td></td><td></td><td>✓</td></tr>
+            <tr><th scope="row">Protocol Buffers</th><td>✓</td><td></td><td></td><td>~</td><td></td><td></td><td></td><td>✓</td><td>✓</td><td>~</td><td></td><td></td></tr>
+            <tr><th scope="row">Zip</th><td>✓</td><td></td><td></td><td>~</td><td></td><td></td><td>~</td><td>✓</td><td>✓</td><td>✓</td><td>~</td><td></td></tr>
+            <tr><th scope="row">Filesystem</th><td>✓</td><td>~</td><td>~</td><td>✓</td><td></td><td></td><td>~</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>~</td></tr>
+            <tr><th scope="row">Runtime heap</th><td>✓</td><td>✓</td><td>✓</td><td>~</td><td></td><td></td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td></tr>
+            <tr class="fold-row"><th scope="row">Fold</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
           </tbody>
         </table>
       </div>
@@ -283,6 +318,9 @@
         ✓ built in. ~ by convention, partly, or only in a companion format: a reference by
         footnote, Markdown's front matter, XML's IDs and entities, HTML's scripts and stylesheets,
         an image spelled out as base64 text, a Word file that is zipped XML. A blank means it isn't there.
+        Random access is reaching any part without reading everything before it. Fragmentation is a
+        document's freedom to leave gaps inside itself that later edits grow into, so a change rewrites a few bytes rather than the whole file.
+        Direct authoring is a person editing the stored form itself, not a rendering of it that's converted back on save.
       </p>
     </div>
   </section>
@@ -519,5 +557,6 @@
 </footer>
 
 <script src="site.js"></script>
+<script src="gem.js"></script>
 </body>
 </html>
