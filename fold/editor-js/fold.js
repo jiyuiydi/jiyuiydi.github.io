@@ -2996,7 +2996,7 @@ define("editor/keymap", ["require", "exports"], function (require, exports) {
      * `bake` replaces a Patch by its value, and has no key for `follow-reference`'s reason.
      */
     exports.MENU_COMMANDS = [
-        'follow-reference', 'toggle-session-program', 'save-document', 'bake', 'focus-patch', 'review-scope',
+        'follow-reference', 'save-document', 'bake', 'focus-patch', 'review-scope',
     ];
     exports.KEYMAP = [
         // The hierarchical cursor. Left/right move among siblings, and up/down to the
@@ -12376,7 +12376,321 @@ define("patch/minimal-path", ["require", "exports", "data/index", "patch/instruc
         return args.length === 1 ? numberArgument(args[0]) : undefined;
     }
 });
-define("patch/accept", ["require", "exports", "data/index", "patch/executor", "patch/instruction", "patch/minimal-path", "patch/opcode"], function (require, exports, index_js_19, executor_js_5, instruction_js_6, minimal_path_js_1, opcode_js_7) {
+define("patch/fold", ["require", "exports", "data/index", "patch/instruction", "patch/minimal-path", "patch/opcode"], function (require, exports, index_js_19, instruction_js_6, minimal_path_js_1, opcode_js_7) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.foldStatement = foldStatement;
+    exports.wayOf = wayOf;
+    exports.wayCalls = wayCalls;
+    /**
+     * `said`, offered to `earlier`: the one statement that says both, `null` when
+     * the two cancel and neither is wanted, or `undefined` when it is a statement
+     * of its own. `spelled` is `said` as the statement it would be on its own.
+     */
+    function foldStatement(earlier, said, spelled) {
+        if (said.calls.length === 0)
+            return undefined;
+        const calls = [];
+        for (const one of said.calls) {
+            const read = callOf(one);
+            if (read === undefined)
+                return undefined;
+            calls.push(read);
+        }
+        // Moves, meeting removals, and appends of elements - but an append of
+        // characters is more of a word, and is the typing rule's, which makes one
+        // string of it rather than an append of two.
+        const spelledAppend = said.spelling && calls.length === 1 && calls[0]?.opcode === opcode_js_7.Opcode.Append;
+        if (!spelledAppend) {
+            const merged = (0, minimal_path_js_1.mergeStatements)(earlier, spelled);
+            if (merged !== undefined)
+                return merged;
+        }
+        const written = writtenOf(earlier);
+        if (written === undefined)
+            return undefined;
+        return putThenEdited(written, said, calls) ?? typedOn(written, said, calls);
+    }
+    function callOf(node) {
+        if (node.metadata !== undefined)
+            return undefined;
+        const read = (0, instruction_js_6.readStatement)(node);
+        if (read?.kind !== 'opcode')
+            return undefined;
+        return { opcode: read.opcode, node: node, arguments: read.arguments };
+    }
+    /** The count an instruction takes, one when it is left out. */
+    function countOf(call) {
+        if (call.arguments.length === 0)
+            return 1;
+        if (call.arguments.length !== 1)
+            return undefined;
+        const argument = call.arguments[0];
+        if (!(argument instanceof index_js_19.Quantity) || argument.form === 'float')
+            return undefined;
+        const value = argument.asNumber();
+        return Number.isInteger(value) ? value : undefined;
+    }
+    /** Its one argument, when that is a string with no markup. */
+    function textOf(call) {
+        const argument = call.arguments.length === 1 ? call.arguments[0] : undefined;
+        return argument instanceof index_js_19.Text && argument.metadata === undefined ? argument.value : undefined;
+    }
+    function writtenOf(statement) {
+        if (statement.metadata !== undefined)
+            return undefined;
+        const read = (0, instruction_js_6.readStatement)(statement);
+        if (read?.kind === 'opcode') {
+            const one = callOf(statement);
+            if (one === undefined || one.opcode === opcode_js_7.Opcode.Child)
+                return undefined;
+            return { path: [], calls: [one] };
+        }
+        if (read?.kind !== 'frame')
+            return undefined;
+        const parts = read.body.children();
+        if (parts.length < 2)
+            return undefined;
+        const path = [];
+        let next = 0;
+        for (; next < parts.length; next++) {
+            const down = callOf(parts[next]);
+            if (down === undefined)
+                return undefined;
+            if (down.opcode === opcode_js_7.Opcode.Metadata && down.arguments.length === 0) {
+                path.push('metadata');
+            }
+            else if (down.opcode === opcode_js_7.Opcode.Child && down.arguments.length > 0) {
+                for (const argument of down.arguments) {
+                    const index = argument instanceof index_js_19.Quantity && argument.form !== 'float' ? argument.asNumber() : undefined;
+                    if (index === undefined || !Number.isInteger(index) || index < 0)
+                        return undefined;
+                    path.push(index);
+                }
+            }
+            else {
+                break;
+            }
+        }
+        if (next === 0 || next === parts.length)
+            return undefined;
+        const calls = [];
+        for (const part of parts.slice(next)) {
+            const one = callOf(part);
+            if (one === undefined)
+                return undefined;
+            calls.push(one);
+        }
+        return { path, calls };
+    }
+    /** Navigation of `child(...)` and `metadata()` steps as the way it goes, or undefined for anything else. */
+    function wayOf(navigation) {
+        const path = [];
+        for (const step of navigation) {
+            const down = callOf(step);
+            if (down?.opcode === opcode_js_7.Opcode.Metadata && down.arguments.length === 0) {
+                path.push('metadata');
+                continue;
+            }
+            if (down?.opcode !== opcode_js_7.Opcode.Child)
+                return undefined;
+            if (down.arguments.length === 0) {
+                path.push(0);
+                continue;
+            }
+            for (const argument of down.arguments) {
+                const index = argument instanceof index_js_19.Quantity && argument.form !== 'float' ? argument.asNumber() : undefined;
+                if (index === undefined || !Number.isInteger(index) || index < 0)
+                    return undefined;
+                path.push(index);
+            }
+        }
+        return path;
+    }
+    /** A way down as instructions: `child(a b) metadata() child(c)`. */
+    function wayCalls(path) {
+        const out = [];
+        let run = [];
+        const flush = () => {
+            if (run.length > 0)
+                out.push((0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Child, ...run.map((index) => (0, instruction_js_6.wholeNumber)(index))));
+            run = [];
+        };
+        for (const step of path) {
+            if (step === 'metadata') {
+                flush();
+                out.push((0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Metadata));
+            }
+            else {
+                run.push(step);
+            }
+        }
+        flush();
+        return out;
+    }
+    /** A way down and calls as one statement: flat when there is nowhere to go and one thing to do. */
+    function statementOf(path, calls) {
+        const [only] = calls;
+        if (path.length === 0 && calls.length === 1 && only !== undefined)
+            return only;
+        return new index_js_19.List([...wayCalls(path), ...calls]);
+    }
+    function startsAlike(a, b, n) {
+        for (let i = 0; i < n; i++)
+            if (a[i] !== b[i])
+                return false;
+        return true;
+    }
+    /** `remove(n)? insert(text)?` at `at`, applied to characters; false when it reaches outside them. */
+    function respelt(parts, at, calls) {
+        for (const one of calls) {
+            if (one.opcode === opcode_js_7.Opcode.Remove) {
+                const n = countOf(one);
+                if (n === undefined || n < 0 || at + n > parts.length)
+                    return false;
+                parts.splice(at, n);
+            }
+            else if (one.opcode === opcode_js_7.Opcode.Insert && textOf(one) !== undefined) {
+                if (at > parts.length)
+                    return false;
+                parts.splice(at, 0, ...(0, index_js_19.graphemes)(textOf(one) ?? ''));
+            }
+            else {
+                return false;
+            }
+        }
+        return true;
+    }
+    /**
+     * The earlier put a value in the seat the later edits: it puts in the value as
+     * edited. `insert(v)` at the seat, `write(v)` over it, or `append(... v)` to
+     * what holds it when it is the last there.
+     */
+    function putThenEdited(a, b, later) {
+        const [first] = a.calls;
+        if (first === undefined || a.calls.length !== 1 || first.arguments.length < 1)
+            return undefined;
+        const depth = b.path.length;
+        const sameSeat = a.path.length === depth && startsAlike(a.path, b.path, depth);
+        const appended = first.opcode === opcode_js_7.Opcode.Append && b.last && depth > 0
+            && a.path.length === depth - 1 && startsAlike(a.path, b.path, depth - 1);
+        const put = appended || (sameSeat && first.arguments.length === 1
+            && ((first.opcode === opcode_js_7.Opcode.Insert && depth > 0) || first.opcode === opcode_js_7.Opcode.Write));
+        // An append to the seat itself is of characters, and is the typing rule's.
+        if (!put || (first.opcode === opcode_js_7.Opcode.Append && !appended))
+            return undefined;
+        const values = [...first.arguments];
+        const value = values[values.length - 1];
+        if (value === undefined || value.metadata !== undefined)
+            return undefined;
+        const [only] = later;
+        if (b.character === undefined && later.length === 1 && only?.opcode === opcode_js_7.Opcode.Write && only.arguments.length === 1) {
+            values[values.length - 1] = only.arguments[0];
+        }
+        else if (!(value instanceof index_js_19.Text)) {
+            return undefined;
+        }
+        else if (b.character === undefined && b.spelling && later.length === 1 && only?.opcode === opcode_js_7.Opcode.Append && only !== undefined
+            && textOf(only) !== undefined) {
+            values[values.length - 1] = new index_js_19.Text(value.value + (textOf(only) ?? ''));
+        }
+        else if (b.character !== undefined) {
+            const parts = [...(0, index_js_19.graphemes)(value.value)];
+            if (!respelt(parts, b.character, later))
+                return undefined;
+            values[values.length - 1] = new index_js_19.Text(parts.join(''));
+        }
+        else {
+            return undefined;
+        }
+        return statementOf(a.path, [(0, instruction_js_6.writeOpcodeCall)(first.opcode, ...values)]);
+    }
+    /**
+     * The earlier typed characters into the leaf the later respells: one stretch of
+     * text, at the end of the leaf or at a character of it.
+     */
+    function typedOn(a, b, later) {
+        if (!b.spelling)
+            return undefined;
+        const [first] = a.calls;
+        if (first === undefined)
+            return undefined;
+        const depth = b.path.length;
+        const sameSeat = a.path.length === depth && startsAlike(a.path, b.path, depth);
+        let typed;
+        let at = 0; // where that text starts, in the leaf as it now is
+        let atEnd = false; // it was appended
+        let gone = 0; // and what the earlier removed there first
+        if (sameSeat && a.calls.length === 1 && first.opcode === opcode_js_7.Opcode.Append && textOf(first) !== undefined) {
+            typed = textOf(first) ?? '';
+            const size = (0, index_js_19.graphemes)(typed).length;
+            if (size > b.length)
+                return undefined;
+            at = b.length - size;
+            atEnd = true;
+        }
+        else if (a.path.length === depth + 1 && startsAlike(a.path, b.path, depth)) {
+            const character = a.path[depth];
+            if (typeof character !== 'number')
+                return undefined;
+            at = character;
+            let next = 0;
+            if (a.calls[next]?.opcode === opcode_js_7.Opcode.Remove) {
+                const n = countOf(a.calls[next]);
+                next++;
+                if (n === undefined || n < 0)
+                    return undefined;
+                gone = n;
+            }
+            if (next < a.calls.length) {
+                const insert = a.calls[next];
+                if (insert.opcode !== opcode_js_7.Opcode.Insert || textOf(insert) === undefined || next + 1 !== a.calls.length)
+                    return undefined;
+                typed = textOf(insert);
+            }
+        }
+        else {
+            return undefined;
+        }
+        const parts = typed === undefined ? [] : [...(0, index_js_19.graphemes)(typed)];
+        const path = a.path.slice(0, depth);
+        const [only] = later;
+        if (b.character === undefined) {
+            // More on the end of the leaf: more of the text, if the text is at the end.
+            if (later.length !== 1 || only?.opcode !== opcode_js_7.Opcode.Append || textOf(only) === undefined)
+                return undefined;
+            if (typed === undefined || at + parts.length !== b.length)
+                return undefined;
+            parts.push(...(0, index_js_19.graphemes)(textOf(only) ?? ''));
+        }
+        else if (b.character >= at && b.character <= at + parts.length && respelt(parts, b.character - at, later)) {
+            // Within the text the earlier typed: the text as it now reads.
+        }
+        else if (typed === undefined && later.length === 1 && only?.opcode === opcode_js_7.Opcode.Remove && only !== undefined) {
+            // Two removals that meet, as among siblings.
+            const m = countOf(only);
+            if (m === undefined || m < 0 || (b.character !== at && b.character + m !== at))
+                return undefined;
+            path.push(b.character);
+            return statementOf(path, [(0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Remove, (0, instruction_js_6.wholeNumber)(gone + m))]);
+        }
+        else {
+            return undefined;
+        }
+        if (parts.length === 0 && gone === 0)
+            return null;
+        if (atEnd)
+            return statementOf(path, [(0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Append, new index_js_19.Text(parts.join('')))]);
+        path.push(at);
+        const calls = [];
+        if (gone > 0)
+            calls.push((0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Remove, (0, instruction_js_6.wholeNumber)(gone)));
+        if (parts.length > 0)
+            calls.push((0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Insert, new index_js_19.Text(parts.join(''))));
+        return statementOf(path, calls);
+    }
+});
+define("patch/accept", ["require", "exports", "data/index", "patch/executor", "patch/instruction", "patch/minimal-path", "patch/opcode"], function (require, exports, index_js_20, executor_js_5, instruction_js_7, minimal_path_js_2, opcode_js_8) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.acceptance = acceptance;
@@ -12405,28 +12719,28 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
         const lead = [];
         const original = overlay?.truncatedAt;
         if (overlay !== undefined && original !== undefined) {
-            if ((0, index_js_19.tiersTo)(document, original) === undefined)
+            if ((0, index_js_20.tiersTo)(document, original) === undefined)
                 return 'what it changed is not in this document';
             const copy = overlay.view(original);
             const refused = swap(original, copy, overlay, plan, true);
             if (refused !== undefined)
                 return refused;
-            const within = (0, minimal_path_js_1.pathWithin)(copy, position.node);
+            const within = (0, minimal_path_js_2.pathWithin)(copy, position.node);
             if (within !== undefined) {
                 site = original;
                 lead.push(...within);
             }
         }
         if (site === undefined) {
-            if ((0, index_js_19.tiersTo)(document, position.node) === undefined)
+            if ((0, index_js_20.tiersTo)(document, position.node) === undefined)
                 return 'where it stopped is not in this document';
             site = position.node;
         }
         // Where the cursor stood, as the document will have it: the node itself, put
         // in by the swap, or the original a copy of the spine stands for.
         const standing = [position.node, ...(overlay === undefined ? [] : [overlay.origin(position.node)])];
-        if (position.offset !== undefined && position.node instanceof index_js_19.Text) {
-            lead.push((0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Child, (0, instruction_js_6.wholeNumber)((0, index_js_19.graphemeIndex)(position.node.value, position.offset))));
+        if (position.offset !== undefined && position.node instanceof index_js_20.Text) {
+            lead.push((0, instruction_js_7.writeOpcodeCall)(opcode_js_8.Opcode.Child, (0, instruction_js_7.wholeNumber)((0, index_js_20.graphemeIndex)(position.node.value, position.offset))));
         }
         const rest = remainder(patch, resumption.resumeFrom);
         if (rest.length > 0)
@@ -12439,7 +12753,7 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
             swap: () => { for (const change of swaps)
                 change(); },
             scope: () => {
-                const cursor = standing.find((node) => (0, index_js_19.tiersTo)(document, node) !== undefined);
+                const cursor = standing.find((node) => (0, index_js_20.tiersTo)(document, node) !== undefined);
                 return cursor === undefined ? undefined : commonAncestor([cursor, ...changed]);
             },
         };
@@ -12449,7 +12763,7 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
         let common;
         for (const node of nodes) {
             const line = [];
-            for (let at = node; at !== undefined; at = (0, index_js_19.ascend)(at))
+            for (let at = node; at !== undefined; at = (0, index_js_20.ascend)(at))
                 line.unshift(at);
             if (common === undefined) {
                 common = line;
@@ -12472,8 +12786,8 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
     function remainder(patch, from) {
         const out = [];
         for (const statement of patch.children().slice(from)) {
-            const read = (0, instruction_js_6.readStatement)(statement);
-            if (read?.kind === 'opcode' && read.opcode === opcode_js_7.Opcode.Sync)
+            const read = (0, instruction_js_7.readStatement)(statement);
+            if (read?.kind === 'opcode' && read.opcode === opcode_js_8.Opcode.Sync)
                 break;
             out.push(statement);
         }
@@ -12492,7 +12806,7 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
             return undefined;
         if (!sameMetadata(original, copy))
             return 'accepting cannot carry an edit to markup yet';
-        if (!(original instanceof index_js_19.List) || !(copy instanceof index_js_19.List))
+        if (!(original instanceof index_js_20.List) || !(copy instanceof index_js_20.List))
             return 'what it changed is not a container';
         // Snapshots: the swaps below splice these containers' own arrays.
         const was = [...original.children()];
@@ -12511,7 +12825,7 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
             const sequence = [];
             for (const child of now) {
                 const home = overlay.origin(child);
-                if (child !== home && child instanceof index_js_19.List && home instanceof index_js_19.List && was.includes(home)) {
+                if (child !== home && child instanceof index_js_20.List && home instanceof index_js_20.List && was.includes(home)) {
                     // A spine copy: keep the original, and swap into it.
                     const refused = swap(home, child, overlay, plan, false);
                     if (refused !== undefined)
@@ -12536,7 +12850,7 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
             // A copy of the original that sits here is the overlay's spine: the same
             // container, with something changed further down. Anything else is a new
             // value in this seat.
-            if (mine instanceof index_js_19.List && theirs instanceof index_js_19.List && overlay.origin(mine) === theirs) {
+            if (mine instanceof index_js_20.List && theirs instanceof index_js_20.List && overlay.origin(mine) === theirs) {
                 const refused = swap(theirs, mine, overlay, plan, record);
                 if (refused !== undefined)
                     return refused;
@@ -12558,7 +12872,7 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
      * falls back to a copy rather than to two parents for one node.
      */
     function movable(node, was, document) {
-        if (was.includes(node) || (0, index_js_19.tiersTo)(document, node) === undefined)
+        if (was.includes(node) || (0, index_js_20.tiersTo)(document, node) === undefined)
             return node;
         return (0, executor_js_5.deepCopy)(node);
     }
@@ -12580,15 +12894,15 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
         if (extended) {
             const value = (0, executor_js_5.deepCopy)(now);
             const added = incoming.slice(old.length);
-            value.metadata = added.length === 0 ? undefined : new index_js_19.Metadata(added.map((entry) => (0, executor_js_5.deepCopy)(entry)));
-            return { site, statements: [(0, instruction_js_6.writeEditCall)(opcode_js_7.Opcode.Write, value)] };
+            value.metadata = added.length === 0 ? undefined : new index_js_20.Metadata(added.map((entry) => (0, executor_js_5.deepCopy)(entry)));
+            return { site, statements: [(0, instruction_js_7.writeEditCall)(opcode_js_8.Opcode.Write, value)] };
         }
         return {
             site,
             statements: [
-                (0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Insert, (0, executor_js_5.deepCopy)(now)),
-                (0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Next),
-                (0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Remove),
+                (0, instruction_js_7.writeOpcodeCall)(opcode_js_8.Opcode.Insert, (0, executor_js_5.deepCopy)(now)),
+                (0, instruction_js_7.writeOpcodeCall)(opcode_js_8.Opcode.Next),
+                (0, instruction_js_7.writeOpcodeCall)(opcode_js_8.Opcode.Remove),
             ],
         };
     }
@@ -12598,13 +12912,13 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
         if (first !== undefined) {
             blocks.push({
                 site: { node: first, offset: undefined },
-                statements: [(0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Remove, ...(was.length === 1 ? [] : [(0, instruction_js_6.wholeNumber)(was.length)]))],
+                statements: [(0, instruction_js_7.writeOpcodeCall)(opcode_js_8.Opcode.Remove, ...(was.length === 1 ? [] : [(0, instruction_js_7.wholeNumber)(was.length)]))],
             });
         }
         if (now.length > 0) {
             blocks.push({
                 site: { node: original, offset: undefined },
-                statements: [(0, instruction_js_6.writeOpcodeCall)(opcode_js_7.Opcode.Append, ...now.map((child) => (0, executor_js_5.deepCopy)(child)))],
+                statements: [(0, instruction_js_7.writeOpcodeCall)(opcode_js_8.Opcode.Append, ...now.map((child) => (0, executor_js_5.deepCopy)(child)))],
             });
         }
     }
@@ -12616,7 +12930,7 @@ define("patch/accept", ["require", "exports", "data/index", "patch/executor", "p
         return a.metadata.equals(b.metadata);
     }
 });
-define("patch/session", ["require", "exports", "data/index", "data/journal", "patch/executor", "patch/instruction", "patch/minimal-path", "patch/opcode", "patch/runtime-values", "patch/accept"], function (require, exports, index_js_20, journal_js_5, executor_js_6, instruction_js_7, minimal_path_js_2, opcode_js_8, runtime_values_js_4, accept_js_1) {
+define("patch/session", ["require", "exports", "data/index", "data/journal", "patch/executor", "patch/instruction", "patch/minimal-path", "patch/opcode", "patch/runtime-values", "patch/accept"], function (require, exports, index_js_21, journal_js_5, executor_js_6, instruction_js_8, minimal_path_js_3, opcode_js_9, runtime_values_js_4, accept_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.SAVE_LABEL = exports.SessionPatch = void 0;
@@ -12712,8 +13026,8 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
          * arrival of a real file service.
          */
         static open(url, source, context, memo) {
-            const open = (0, instruction_js_7.writeServiceCall)(new index_js_20.Text(executor_js_6.URL_SERVICE), url);
-            return new SessionPatch(new index_js_20.Patch([open]), source, context, memo);
+            const open = (0, instruction_js_8.writeServiceCall)(new index_js_21.Text(executor_js_6.URL_SERVICE), url);
+            return new SessionPatch(new index_js_21.Patch([open]), source, context, memo);
         }
         /**
          * A session over a document that is already in memory.
@@ -12730,8 +13044,8 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
          * effect does. An unsaved document is not a document that cannot be saved.
          */
         static of(source, context, memo) {
-            const open = (0, instruction_js_7.writeServiceCall)(new index_js_20.Text(executor_js_6.URL_SERVICE), new index_js_20.Symbol(index_js_20.SymbolValue.Parameter));
-            return new SessionPatch(new index_js_20.Patch([open]), source, context, memo);
+            const open = (0, instruction_js_8.writeServiceCall)(new index_js_21.Text(executor_js_6.URL_SERVICE), new index_js_21.Symbol(index_js_21.SymbolValue.Parameter));
+            return new SessionPatch(new index_js_21.Patch([open]), source, context, memo);
         }
         /**
          * The document as it currently stands: this program, replayed.
@@ -12781,11 +13095,11 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
             const instructions = [];
             let from = this.executor.where();
             for (const edit of edits) {
-                instructions.push(...(0, minimal_path_js_2.minimalPath)(from, edit.site));
-                instructions.push((0, instruction_js_7.writeEditCall)(edit.opcode, ...edit.arguments));
+                instructions.push(...(0, minimal_path_js_3.minimalPath)(from, edit.site));
+                instructions.push((0, instruction_js_8.writeEditCall)(edit.opcode, ...edit.arguments));
                 from = landingOf(edit);
             }
-            const simplified = (0, minimal_path_js_2.simplify)(instructions);
+            const simplified = (0, minimal_path_js_3.simplify)(instructions);
             // A wrapper rather than a bare Symbol, because "no Problem" and "did not
             // fold" are both `undefined` and conflating them appended the statement as
             // well as folding it - the document was right and the program said the same
@@ -12793,7 +13107,7 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
             const folded = this.foldIntoInsert(edits, simplified);
             if (folded !== undefined)
                 return folded.problem;
-            const frame = new index_js_20.List([...simplified]);
+            const frame = new index_js_21.List([...simplified]);
             // A move of the element the last statement just moved is folded into that
             // statement rather than appended; the document moves by this press either way.
             if (!this.foldIntoMove(frame))
@@ -12832,8 +13146,8 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
         /** One statement out of blocks, every path spelled from where this program's cursor stands now. */
         frameOf(blocks) {
             const from = this.executor.where();
-            return new index_js_20.List(blocks.map((block) => new index_js_20.List([
-                ...(0, minimal_path_js_2.minimalPath)(from, block.site),
+            return new index_js_21.List(blocks.map((block) => new index_js_21.List([
+                ...(0, minimal_path_js_3.minimalPath)(from, block.site),
                 ...block.statements.map((statement) => (0, executor_js_6.deepCopy)(statement)),
             ])));
         }
@@ -12888,7 +13202,7 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
                 try {
                     // A copy for the run: a List adopts what it is built from, and the block
                     // belongs to the program.
-                    const problem = this.executor.step({ kind: 'frame', body: new index_js_20.List([(0, executor_js_6.deepCopy)(resumed)]) }).problem;
+                    const problem = this.executor.step({ kind: 'frame', body: new index_js_21.List([(0, executor_js_6.deepCopy)(resumed)]) }).problem;
                     if (this.executor.escaped)
                         refused = (problem === undefined ? undefined : (0, executor_js_6.causeOf)(problem)) ?? 'it wrote outside what its sync asked to change';
                     else
@@ -12946,20 +13260,20 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
         foldIntoInsert(edits, instructions) {
             const edit = edits[0];
             const value = edit?.arguments[0];
-            if (edits.length !== 1 || edit === undefined || edit.opcode !== opcode_js_8.Opcode.Write)
+            if (edits.length !== 1 || edit === undefined || edit.opcode !== opcode_js_9.Opcode.Write)
                 return undefined;
             if (edit.arguments.length !== 1 || value === undefined)
                 return undefined;
             const navigation = instructions.slice(0, -1);
-            const target = (0, minimal_path_js_2.mergeableInsert)(this.program.children(), navigation);
+            const target = (0, minimal_path_js_3.mergeableInsert)(this.program.children(), navigation);
             if (target === undefined)
                 return undefined;
             const existing = target.frame.child(target.at);
-            const call = existing === undefined ? undefined : (0, instruction_js_7.readStatement)(existing);
+            const call = existing === undefined ? undefined : (0, instruction_js_8.readStatement)(existing);
             if (call === undefined || call.kind !== 'opcode')
                 return undefined;
-            target.frame.replace(target.at, (0, instruction_js_7.writeEditCall)(call.opcode, (0, executor_js_6.deepCopy)(value)));
-            const delta = new index_js_20.List([...instructions]);
+            target.frame.replace(target.at, (0, instruction_js_8.writeEditCall)(call.opcode, (0, executor_js_6.deepCopy)(value)));
+            const delta = new index_js_21.List([...instructions]);
             return { problem: this.settle(this.executor.step({ kind: 'frame', body: delta }).problem) };
         }
         /**
@@ -12977,7 +13291,7 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
             const last = this.program.child(index);
             if (index < 1 || last === undefined)
                 return false;
-            const merged = (0, minimal_path_js_2.mergeMoves)(last, frame);
+            const merged = (0, minimal_path_js_3.mergeMoves)(last, frame);
             if (merged === undefined)
                 return false;
             if (merged === null)
@@ -13067,11 +13381,11 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
             // inserting "X", then "Y", then "Z" at 3, 4 and 5 land on the same tree.
             // That is the same agreement `write` had - it was just invisible there,
             // because an absolute write is its own accumulation.
-            target.body.replace(target.index, (0, instruction_js_7.writeEditCall)(target.opcode, revised));
+            target.body.replace(target.index, (0, instruction_js_8.writeEditCall)(target.opcode, revised));
             const from = this.executor.where();
-            const delta = new index_js_20.List([...(0, minimal_path_js_2.simplify)([
-                    ...(0, minimal_path_js_2.minimalPath)(from, edit.site),
-                    (0, instruction_js_7.writeEditCall)(edit.opcode, (0, executor_js_6.deepCopy)(value)),
+            const delta = new index_js_21.List([...(0, minimal_path_js_3.simplify)([
+                    ...(0, minimal_path_js_3.minimalPath)(from, edit.site),
+                    (0, instruction_js_8.writeEditCall)(edit.opcode, (0, executor_js_6.deepCopy)(value)),
                 ])]);
             return this.settle(this.executor.step({ kind: 'frame', body: delta }).problem);
         }
@@ -13145,7 +13459,7 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
                 const child = children[index];
                 if (child === undefined)
                     continue;
-                if ((0, instruction_js_7.readStatement)(child)?.kind === 'frame')
+                if ((0, instruction_js_8.readStatement)(child)?.kind === 'frame')
                     return index;
             }
             return -1;
@@ -13163,12 +13477,12 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
             if (at < 1)
                 return undefined;
             const frame = this.program.child(at);
-            const statement = frame === undefined ? undefined : (0, instruction_js_7.readStatement)(frame);
+            const statement = frame === undefined ? undefined : (0, instruction_js_8.readStatement)(frame);
             if (statement === undefined || statement.kind !== 'frame')
                 return undefined;
             const index = statement.body.count() - 1;
             const last = statement.body.child(index);
-            const call = last === undefined ? undefined : (0, instruction_js_7.readStatement)(last);
+            const call = last === undefined ? undefined : (0, instruction_js_8.readStatement)(last);
             if (call === undefined || call.kind !== 'opcode' || call.arguments.length !== 1)
                 return undefined;
             if (!AMENDABLE_VALUE.has(call.opcode))
@@ -13197,10 +13511,10 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
             // these edits were synced and this one says the same thing, so the second
             // replaces the first rather than halting in front of it.
             this.discardPendingSave();
-            const call = (0, instruction_js_7.writeOpcodeCall)(opcode_js_8.Opcode.Sync, new index_js_20.Text(exports.SAVE_LABEL));
+            const call = (0, instruction_js_8.writeOpcodeCall)(opcode_js_9.Opcode.Sync, new index_js_21.Text(exports.SAVE_LABEL));
             this.program.append(call);
             this.settle(this.executor.step({
-                kind: 'opcode', opcode: opcode_js_8.Opcode.Sync, arguments: [new index_js_20.Text(exports.SAVE_LABEL)],
+                kind: 'opcode', opcode: opcode_js_9.Opcode.Sync, arguments: [new index_js_21.Text(exports.SAVE_LABEL)],
             }).problem);
             const document = this.collapse();
             const context = this.context;
@@ -13246,7 +13560,7 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
          */
         collapse() {
             const document = this.executor.working();
-            const copy = new index_js_20.List(document.children().map((child) => (0, executor_js_6.deepCopy)(child)));
+            const copy = new index_js_21.List(document.children().map((child) => (0, executor_js_6.deepCopy)(child)));
             const metadata = document.metadata;
             copy.metadata = metadata === undefined ? undefined : (0, executor_js_6.deepCopy)(metadata);
             return copy;
@@ -13277,8 +13591,8 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
         syncIndex() {
             const last = this.program.count() - 1;
             const trailing = last < 0 ? undefined : this.program.child(last);
-            const statement = trailing === undefined ? undefined : (0, instruction_js_7.readStatement)(trailing);
-            return statement?.kind === 'opcode' && statement.opcode === opcode_js_8.Opcode.Sync ? last : -1;
+            const statement = trailing === undefined ? undefined : (0, instruction_js_8.readStatement)(trailing);
+            return statement?.kind === 'opcode' && statement.opcode === opcode_js_9.Opcode.Sync ? last : -1;
         }
     }
     exports.SessionPatch = SessionPatch;
@@ -13305,14 +13619,14 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
      * where the cursor is.
      */
     function landingOf(edit) {
-        if (edit.opcode !== opcode_js_8.Opcode.Remove || edit.site.offset !== undefined)
+        if (edit.opcode !== opcode_js_9.Opcode.Remove || edit.site.offset !== undefined)
             return edit.site;
         const parent = edit.site.node.encodingParent;
         if (parent === undefined)
             return edit.site;
         const index = parent.indexOf(edit.site.node);
         const argument = edit.arguments[0];
-        const count = argument instanceof index_js_20.Quantity ? Number(argument.asNumber()) : 1;
+        const count = argument instanceof index_js_21.Quantity ? Number(argument.asNumber()) : 1;
         if (index < 0 || parent.child(index + count) !== undefined)
             return edit.site;
         return { node: parent, offset: undefined };
@@ -13326,7 +13640,7 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
      * because `accumulated` can only fold two of these into one. `remove` is the
      * opcode this keeps out, and its argument is a count.
      */
-    const AMENDABLE_VALUE = new Set([opcode_js_8.Opcode.Write, opcode_js_8.Opcode.Insert, opcode_js_8.Opcode.Append]);
+    const AMENDABLE_VALUE = new Set([opcode_js_9.Opcode.Write, opcode_js_9.Opcode.Insert, opcode_js_9.Opcode.Append]);
     /**
      * What an amended statement's argument becomes, or undefined when this edit
      * cannot be folded into it - which `amendable` asks and `amend` relies on.
@@ -13353,52 +13667,52 @@ define("patch/session", ["require", "exports", "data/index", "data/journal", "pa
         const value = edit.arguments[0];
         if (edit.arguments.length !== 1 || value === undefined)
             return undefined;
-        const previous = (0, instruction_js_7.readStatement)(target.body.child(target.index) ?? new index_js_20.List());
+        const previous = (0, instruction_js_8.readStatement)(target.body.child(target.index) ?? new index_js_21.List());
         const held = previous?.kind === 'opcode' ? previous.arguments[0] : undefined;
-        if (target.opcode === opcode_js_8.Opcode.Write) {
-            if (edit.opcode === opcode_js_8.Opcode.Write)
+        if (target.opcode === opcode_js_9.Opcode.Write) {
+            if (edit.opcode === opcode_js_9.Opcode.Write)
                 return value;
             // Letters into the token the write wrote, and nothing else: an element-level
             // insert or append has a List for its site, and a token that has changed
             // since the write no longer reads what the statement holds.
-            const token = edit.site.node instanceof index_js_20.Text ? edit.site.node.value : undefined;
-            if (!(held instanceof index_js_20.Text) || !(value instanceof index_js_20.Text) || token !== held.value)
+            const token = edit.site.node instanceof index_js_21.Text ? edit.site.node.value : undefined;
+            if (!(held instanceof index_js_21.Text) || !(value instanceof index_js_21.Text) || token !== held.value)
                 return undefined;
-            if (edit.opcode === opcode_js_8.Opcode.Append)
-                return new index_js_20.Text(held.value + value.value);
+            if (edit.opcode === opcode_js_9.Opcode.Append)
+                return new index_js_21.Text(held.value + value.value);
             const offset = edit.site.offset;
-            if (edit.opcode !== opcode_js_8.Opcode.Insert || offset === undefined)
+            if (edit.opcode !== opcode_js_9.Opcode.Insert || offset === undefined)
                 return undefined;
-            return new index_js_20.Text(held.value.slice(0, offset) + value.value + held.value.slice(offset));
+            return new index_js_21.Text(held.value.slice(0, offset) + value.value + held.value.slice(offset));
         }
-        if (!(held instanceof index_js_20.Text) || !(value instanceof index_js_20.Text))
+        if (!(held instanceof index_js_21.Text) || !(value instanceof index_js_21.Text))
             return value;
-        return new index_js_20.Text(held.value + value.value);
+        return new index_js_21.Text(held.value + value.value);
     }
 });
-define("patch/index", ["require", "exports", "patch/opcode", "patch/instruction", "patch/cursor", "patch/evaluate", "patch/overlay", "patch/executor", "patch/minimal-path", "patch/session", "patch/accept", "patch/runtime-values", "patch/library", "patch/examples", "patch/monitors", "patch/dependencies"], function (require, exports, opcode_js_9, instruction_js_8, cursor_js_4, evaluate_js_1, overlay_js_3, executor_js_7, minimal_path_js_3, session_js_1, accept_js_2, runtime_values_js_5, library_js_2, examples_js_2, monitors_js_3, dependencies_js_2) {
+define("patch/index", ["require", "exports", "patch/opcode", "patch/instruction", "patch/cursor", "patch/evaluate", "patch/overlay", "patch/executor", "patch/minimal-path", "patch/fold", "patch/session", "patch/accept", "patch/runtime-values", "patch/library", "patch/examples", "patch/monitors", "patch/dependencies"], function (require, exports, opcode_js_10, instruction_js_9, cursor_js_4, evaluate_js_1, overlay_js_3, executor_js_7, minimal_path_js_4, fold_js_1, session_js_1, accept_js_2, runtime_values_js_5, library_js_2, examples_js_2, monitors_js_3, dependencies_js_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.dependenciesOf = exports.MonitorValue = exports.MonitorSet = exports.MonitorPresence = exports.MonitorKeyQuery = exports.MonitorIndexSpacing = exports.MonitorIndex = exports.MonitorDescendantMetadata = exports.MonitorCount = exports.Monitor = exports.selectedOption = exports.operandsOf = exports.matches = exports.IF_RETURN = exports.IF_ELSE = exports.IF_THEN = exports.IF_CONDITION = exports.standardServices = exports.standardLibrary = exports.resolverOf = exports.NativeService = exports.ChoicePoint = exports.SideEffect = exports.RuntimeValue = exports.acceptance = exports.joinSteps = exports.SAVE_LABEL = exports.SessionPatch = exports.mergeStatements = exports.mergeMoves = exports.mergeableInsert = exports.simplify = exports.hopsWithin = exports.pathWithin = exports.referencePath = exports.minimalPath = exports.URL_SERVICE = exports.PROBLEM_CHANNEL = exports.causeOf = exports.problem = exports.deepCopy = exports.ReplayExecutor = exports.NO_OVERLAY = exports.Overlay = exports.isSelfReference = exports.SELF_REFERENCE = exports.Evaluator = exports.PatchCursor = exports.wholeNumber = exports.isStatement = exports.instructionOpcode = exports.opcodeOf = exports.describe = exports.formatData = exports.formatStatement = exports.formatProgram = exports.writeServiceCall = exports.writeOpcodeCall = exports.writeEditCall = exports.readStatement = exports.isModification = exports.isNavigation = exports.FROZEN_THROUGH = exports.MAX_NIBBLE_OPCODE = exports.LEGACY_NAMES = exports.OPCODE_NAME = exports.Opcode = void 0;
-    Object.defineProperty(exports, "Opcode", { enumerable: true, get: function () { return opcode_js_9.Opcode; } });
-    Object.defineProperty(exports, "OPCODE_NAME", { enumerable: true, get: function () { return opcode_js_9.OPCODE_NAME; } });
-    Object.defineProperty(exports, "LEGACY_NAMES", { enumerable: true, get: function () { return opcode_js_9.LEGACY_NAMES; } });
-    Object.defineProperty(exports, "MAX_NIBBLE_OPCODE", { enumerable: true, get: function () { return opcode_js_9.MAX_NIBBLE_OPCODE; } });
-    Object.defineProperty(exports, "FROZEN_THROUGH", { enumerable: true, get: function () { return opcode_js_9.FROZEN_THROUGH; } });
-    Object.defineProperty(exports, "isNavigation", { enumerable: true, get: function () { return opcode_js_9.isNavigation; } });
-    Object.defineProperty(exports, "isModification", { enumerable: true, get: function () { return opcode_js_9.isModification; } });
-    Object.defineProperty(exports, "readStatement", { enumerable: true, get: function () { return instruction_js_8.readStatement; } });
-    Object.defineProperty(exports, "writeEditCall", { enumerable: true, get: function () { return instruction_js_8.writeEditCall; } });
-    Object.defineProperty(exports, "writeOpcodeCall", { enumerable: true, get: function () { return instruction_js_8.writeOpcodeCall; } });
-    Object.defineProperty(exports, "writeServiceCall", { enumerable: true, get: function () { return instruction_js_8.writeServiceCall; } });
-    Object.defineProperty(exports, "formatProgram", { enumerable: true, get: function () { return instruction_js_8.formatProgram; } });
-    Object.defineProperty(exports, "formatStatement", { enumerable: true, get: function () { return instruction_js_8.formatStatement; } });
-    Object.defineProperty(exports, "formatData", { enumerable: true, get: function () { return instruction_js_8.formatData; } });
-    Object.defineProperty(exports, "describe", { enumerable: true, get: function () { return instruction_js_8.describe; } });
-    Object.defineProperty(exports, "opcodeOf", { enumerable: true, get: function () { return instruction_js_8.opcodeOf; } });
-    Object.defineProperty(exports, "instructionOpcode", { enumerable: true, get: function () { return instruction_js_8.instructionOpcode; } });
-    Object.defineProperty(exports, "isStatement", { enumerable: true, get: function () { return instruction_js_8.isStatement; } });
-    Object.defineProperty(exports, "wholeNumber", { enumerable: true, get: function () { return instruction_js_8.wholeNumber; } });
+    exports.dependenciesOf = exports.MonitorValue = exports.MonitorSet = exports.MonitorPresence = exports.MonitorKeyQuery = exports.MonitorIndexSpacing = exports.MonitorIndex = exports.MonitorDescendantMetadata = exports.MonitorCount = exports.Monitor = exports.selectedOption = exports.operandsOf = exports.matches = exports.IF_RETURN = exports.IF_ELSE = exports.IF_THEN = exports.IF_CONDITION = exports.standardServices = exports.standardLibrary = exports.resolverOf = exports.NativeService = exports.ChoicePoint = exports.SideEffect = exports.RuntimeValue = exports.acceptance = exports.joinSteps = exports.SAVE_LABEL = exports.SessionPatch = exports.wayCalls = exports.wayOf = exports.foldStatement = exports.mergeStatements = exports.mergeMoves = exports.mergeableInsert = exports.simplify = exports.hopsWithin = exports.pathWithin = exports.referencePath = exports.minimalPath = exports.URL_SERVICE = exports.PROBLEM_CHANNEL = exports.causeOf = exports.problem = exports.deepCopy = exports.ReplayExecutor = exports.NO_OVERLAY = exports.Overlay = exports.isSelfReference = exports.SELF_REFERENCE = exports.Evaluator = exports.PatchCursor = exports.wholeNumber = exports.isStatement = exports.instructionOpcode = exports.opcodeOf = exports.describe = exports.formatData = exports.formatStatement = exports.formatProgram = exports.writeServiceCall = exports.writeOpcodeCall = exports.writeEditCall = exports.readStatement = exports.isModification = exports.isNavigation = exports.FROZEN_THROUGH = exports.MAX_NIBBLE_OPCODE = exports.LEGACY_NAMES = exports.OPCODE_NAME = exports.Opcode = void 0;
+    Object.defineProperty(exports, "Opcode", { enumerable: true, get: function () { return opcode_js_10.Opcode; } });
+    Object.defineProperty(exports, "OPCODE_NAME", { enumerable: true, get: function () { return opcode_js_10.OPCODE_NAME; } });
+    Object.defineProperty(exports, "LEGACY_NAMES", { enumerable: true, get: function () { return opcode_js_10.LEGACY_NAMES; } });
+    Object.defineProperty(exports, "MAX_NIBBLE_OPCODE", { enumerable: true, get: function () { return opcode_js_10.MAX_NIBBLE_OPCODE; } });
+    Object.defineProperty(exports, "FROZEN_THROUGH", { enumerable: true, get: function () { return opcode_js_10.FROZEN_THROUGH; } });
+    Object.defineProperty(exports, "isNavigation", { enumerable: true, get: function () { return opcode_js_10.isNavigation; } });
+    Object.defineProperty(exports, "isModification", { enumerable: true, get: function () { return opcode_js_10.isModification; } });
+    Object.defineProperty(exports, "readStatement", { enumerable: true, get: function () { return instruction_js_9.readStatement; } });
+    Object.defineProperty(exports, "writeEditCall", { enumerable: true, get: function () { return instruction_js_9.writeEditCall; } });
+    Object.defineProperty(exports, "writeOpcodeCall", { enumerable: true, get: function () { return instruction_js_9.writeOpcodeCall; } });
+    Object.defineProperty(exports, "writeServiceCall", { enumerable: true, get: function () { return instruction_js_9.writeServiceCall; } });
+    Object.defineProperty(exports, "formatProgram", { enumerable: true, get: function () { return instruction_js_9.formatProgram; } });
+    Object.defineProperty(exports, "formatStatement", { enumerable: true, get: function () { return instruction_js_9.formatStatement; } });
+    Object.defineProperty(exports, "formatData", { enumerable: true, get: function () { return instruction_js_9.formatData; } });
+    Object.defineProperty(exports, "describe", { enumerable: true, get: function () { return instruction_js_9.describe; } });
+    Object.defineProperty(exports, "opcodeOf", { enumerable: true, get: function () { return instruction_js_9.opcodeOf; } });
+    Object.defineProperty(exports, "instructionOpcode", { enumerable: true, get: function () { return instruction_js_9.instructionOpcode; } });
+    Object.defineProperty(exports, "isStatement", { enumerable: true, get: function () { return instruction_js_9.isStatement; } });
+    Object.defineProperty(exports, "wholeNumber", { enumerable: true, get: function () { return instruction_js_9.wholeNumber; } });
     Object.defineProperty(exports, "PatchCursor", { enumerable: true, get: function () { return cursor_js_4.PatchCursor; } });
     Object.defineProperty(exports, "Evaluator", { enumerable: true, get: function () { return evaluate_js_1.Evaluator; } });
     Object.defineProperty(exports, "SELF_REFERENCE", { enumerable: true, get: function () { return evaluate_js_1.SELF_REFERENCE; } });
@@ -13411,14 +13725,17 @@ define("patch/index", ["require", "exports", "patch/opcode", "patch/instruction"
     Object.defineProperty(exports, "causeOf", { enumerable: true, get: function () { return executor_js_7.causeOf; } });
     Object.defineProperty(exports, "PROBLEM_CHANNEL", { enumerable: true, get: function () { return executor_js_7.PROBLEM_CHANNEL; } });
     Object.defineProperty(exports, "URL_SERVICE", { enumerable: true, get: function () { return executor_js_7.URL_SERVICE; } });
-    Object.defineProperty(exports, "minimalPath", { enumerable: true, get: function () { return minimal_path_js_3.minimalPath; } });
-    Object.defineProperty(exports, "referencePath", { enumerable: true, get: function () { return minimal_path_js_3.referencePath; } });
-    Object.defineProperty(exports, "pathWithin", { enumerable: true, get: function () { return minimal_path_js_3.pathWithin; } });
-    Object.defineProperty(exports, "hopsWithin", { enumerable: true, get: function () { return minimal_path_js_3.hopsWithin; } });
-    Object.defineProperty(exports, "simplify", { enumerable: true, get: function () { return minimal_path_js_3.simplify; } });
-    Object.defineProperty(exports, "mergeableInsert", { enumerable: true, get: function () { return minimal_path_js_3.mergeableInsert; } });
-    Object.defineProperty(exports, "mergeMoves", { enumerable: true, get: function () { return minimal_path_js_3.mergeMoves; } });
-    Object.defineProperty(exports, "mergeStatements", { enumerable: true, get: function () { return minimal_path_js_3.mergeStatements; } });
+    Object.defineProperty(exports, "minimalPath", { enumerable: true, get: function () { return minimal_path_js_4.minimalPath; } });
+    Object.defineProperty(exports, "referencePath", { enumerable: true, get: function () { return minimal_path_js_4.referencePath; } });
+    Object.defineProperty(exports, "pathWithin", { enumerable: true, get: function () { return minimal_path_js_4.pathWithin; } });
+    Object.defineProperty(exports, "hopsWithin", { enumerable: true, get: function () { return minimal_path_js_4.hopsWithin; } });
+    Object.defineProperty(exports, "simplify", { enumerable: true, get: function () { return minimal_path_js_4.simplify; } });
+    Object.defineProperty(exports, "mergeableInsert", { enumerable: true, get: function () { return minimal_path_js_4.mergeableInsert; } });
+    Object.defineProperty(exports, "mergeMoves", { enumerable: true, get: function () { return minimal_path_js_4.mergeMoves; } });
+    Object.defineProperty(exports, "mergeStatements", { enumerable: true, get: function () { return minimal_path_js_4.mergeStatements; } });
+    Object.defineProperty(exports, "foldStatement", { enumerable: true, get: function () { return fold_js_1.foldStatement; } });
+    Object.defineProperty(exports, "wayOf", { enumerable: true, get: function () { return fold_js_1.wayOf; } });
+    Object.defineProperty(exports, "wayCalls", { enumerable: true, get: function () { return fold_js_1.wayCalls; } });
     Object.defineProperty(exports, "SessionPatch", { enumerable: true, get: function () { return session_js_1.SessionPatch; } });
     Object.defineProperty(exports, "SAVE_LABEL", { enumerable: true, get: function () { return session_js_1.SAVE_LABEL; } });
     Object.defineProperty(exports, "joinSteps", { enumerable: true, get: function () { return session_js_1.joinSteps; } });
@@ -13483,7 +13800,7 @@ define("os/base64", ["require", "exports"], function (require, exports) {
         return toBase64(bytes, alphabet) === text ? bytes : undefined;
     }
 });
-define("os/url", ["require", "exports", "data/index", "os/base64"], function (require, exports, index_js_21, base64_js_1) {
+define("os/url", ["require", "exports", "data/index", "os/base64"], function (require, exports, index_js_22, base64_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.URL_FORMAT = void 0;
@@ -13498,7 +13815,7 @@ define("os/url", ["require", "exports", "data/index", "os/base64"], function (re
         let fragment;
         const hash = rest.indexOf('#');
         if (hash >= 0) {
-            fragment = new index_js_21.Text(decode(rest.slice(hash + 1)));
+            fragment = new index_js_22.Text(decode(rest.slice(hash + 1)));
             rest = rest.slice(0, hash);
         }
         let scheme = '';
@@ -13521,7 +13838,7 @@ define("os/url", ["require", "exports", "data/index", "os/base64"], function (re
             // Domain segments as a list, with no dots. An empty authority - `file:///`
             // - is an empty list rather than a list holding one empty segment.
             if (authority.length > 0)
-                host = authority.split('.').map((part) => new index_js_21.Text(decode(part)));
+                host = authority.split('.').map((part) => new index_js_22.Text(decode(part)));
         }
         let query = [];
         const mark = rest.indexOf('?');
@@ -13536,12 +13853,12 @@ define("os/url", ["require", "exports", "data/index", "os/base64"], function (re
             pathText = pathText.slice(1);
         const path = pathText.length === 0
             ? []
-            : pathText.split('/').map((part) => new index_js_21.Text(decode(part)));
+            : pathText.split('/').map((part) => new index_js_22.Text(decode(part)));
         return {
-            scheme: new index_js_21.Text(scheme),
-            host: new index_js_21.List(host),
-            path: new index_js_21.List(path),
-            query: new index_js_21.List(query),
+            scheme: new index_js_22.Text(scheme),
+            host: new index_js_22.List(host),
+            path: new index_js_22.List(path),
+            query: new index_js_22.List(query),
             fragment,
         };
     }
@@ -13563,16 +13880,16 @@ define("os/url", ["require", "exports", "data/index", "os/base64"], function (re
         const children = [url.scheme, url.host, url.path, url.query];
         if (url.fragment !== undefined)
             children.push(url.fragment);
-        return new index_js_21.List(children);
+        return new index_js_22.List(children);
     }
     /** The inverse of `toFold`, which is what lets a nested URL be spelled back. */
     function fromFold(node) {
-        if (!(node instanceof index_js_21.List) || node.count() < 4)
+        if (!(node instanceof index_js_22.List) || node.count() < 4)
             return undefined;
         const [scheme, host, path, query, fragment] = node.children();
-        if (scheme === undefined || !(host instanceof index_js_21.List))
+        if (scheme === undefined || !(host instanceof index_js_22.List))
             return undefined;
-        if (!(path instanceof index_js_21.List) || !(query instanceof index_js_21.List))
+        if (!(path instanceof index_js_22.List) || !(query instanceof index_js_22.List))
             return undefined;
         return { scheme, host, path, query, fragment };
     }
@@ -13604,12 +13921,12 @@ define("os/url", ["require", "exports", "data/index", "os/base64"], function (re
             // look the same, which is right - the difference is in the URL's spelling
             // and not in what it says.
             if (equals < 0)
-                return new index_js_21.Keyed([new index_js_21.Text(decode(pair))]);
-            return new index_js_21.Keyed([new index_js_21.Text(decode(pair.slice(0, equals))), value(pair.slice(equals + 1))]);
+                return new index_js_22.Keyed([new index_js_22.Text(decode(pair))]);
+            return new index_js_22.Keyed([new index_js_22.Text(decode(pair.slice(0, equals))), value(pair.slice(equals + 1))]);
         });
     }
     function field(entry) {
-        if (!(entry instanceof index_js_21.Keyed))
+        if (!(entry instanceof index_js_22.Keyed))
             return escapeIn(spell(entry), KEY);
         const key = entry.key();
         const name = key === undefined ? '' : escapeIn(spell(key), KEY);
@@ -13620,7 +13937,7 @@ define("os/url", ["require", "exports", "data/index", "os/base64"], function (re
         // that could be read as structure; a plain value escapes only the delimiters
         // it sits between. That is one rule about what a character means where it is,
         // and it is what brings a wrapped URL back percent-escaped as it arrived.
-        const reserved = held instanceof index_js_21.List ? STRICT : VALUE;
+        const reserved = held instanceof index_js_22.List ? STRICT : VALUE;
         return `${name}=${escapeIn(spell(held), reserved)}`;
     }
     /**
@@ -13638,25 +13955,25 @@ define("os/url", ["require", "exports", "data/index", "os/base64"], function (re
             // Tagged, because a list of lists sitting where a string was is otherwise
             // a reader's guess. The outer URL needs no tag: instruction 0 says what it
             // is by being instruction 0.
-            nested.metadata = new index_js_21.Metadata([new index_js_21.Keyed([new index_js_21.Text('format'), new index_js_21.Text(exports.URL_FORMAT)])]);
+            nested.metadata = new index_js_22.Metadata([new index_js_22.Keyed([new index_js_22.Text('format'), new index_js_22.Text(exports.URL_FORMAT)])]);
             if (spell(nested) === text)
                 return nested;
         }
         if (/^-?[0-9]+$/.test(text)) {
             const digits = Number(text);
-            const number = index_js_21.Quantity.narrowest(Number.isSafeInteger(digits) ? digits : BigInt(text));
+            const number = index_js_22.Quantity.narrowest(Number.isSafeInteger(digits) ? digits : BigInt(text));
             if (spell(number) === text)
                 return number;
         }
         if (opaque(text)) {
             const bytes = (0, base64_js_1.fromBase64)(text, 'base64url');
             if (bytes !== undefined) {
-                const bits = new index_js_21.Bits(bytes, bytes.length * 8);
+                const bits = new index_js_22.Bits(bytes, bytes.length * 8);
                 if (spell(bits) === text)
                     return bits;
             }
         }
-        return new index_js_21.Text(text);
+        return new index_js_22.Text(text);
     }
     /**
      * Whether a query value is opaque enough to be worth reading as bytes.
@@ -13680,11 +13997,11 @@ define("os/url", ["require", "exports", "data/index", "os/base64"], function (re
     // Spelling a value back out. One function, because the round-trip rule above
     // compares against it, and a second spelling would make the comparison a lie.
     function spell(node) {
-        if (node instanceof index_js_21.Text)
+        if (node instanceof index_js_22.Text)
             return node.value;
-        if (node instanceof index_js_21.Quantity)
+        if (node instanceof index_js_22.Quantity)
             return String(node.value);
-        if (node instanceof index_js_21.Bits)
+        if (node instanceof index_js_22.Bits)
             return (0, base64_js_1.toBase64)(node.value, 'base64url');
         const url = fromFold(node);
         return url === undefined ? '' : formatUrl(url);
@@ -13753,7 +14070,7 @@ define("os/url", ["require", "exports", "data/index", "os/base64"], function (re
         return text.length;
     }
 });
-define("os/service", ["require", "exports", "data/index", "patch/index", "os/url"], function (require, exports, index_js_22, index_js_23, url_js_1) {
+define("os/service", ["require", "exports", "data/index", "patch/index", "os/url"], function (require, exports, index_js_23, index_js_24, url_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.UrlService = void 0;
@@ -13793,14 +14110,14 @@ define("os/service", ["require", "exports", "data/index", "patch/index", "os/url
      * miss that goes and fetches; the shape here is already that shape with the
      * fetch left out.
      */
-    class UrlService extends index_js_23.NativeService {
+    class UrlService extends index_js_24.NativeService {
         open = new Map();
         constructor() {
             // SPECIFICATION section 5.4: the presentation is a list of default
             // parameter values, and a Parameter symbol stands where there is no
             // sensible default. A URL service with a default address would be a service
             // with an opinion about where you keep your files.
-            super(new index_js_22.Text(index_js_23.URL_SERVICE), new index_js_22.List([new index_js_22.Symbol(index_js_22.SymbolValue.Parameter)]));
+            super(new index_js_23.Text(index_js_24.URL_SERVICE), new index_js_23.List([new index_js_23.Symbol(index_js_23.SymbolValue.Parameter)]));
         }
         /** Record what an address resolved to. Called by whoever did the opening. */
         resolved(url, root) { this.open.set((0, url_js_1.formatUrl)(url), root); }
@@ -13808,9 +14125,9 @@ define("os/service", ["require", "exports", "data/index", "patch/index", "os/url
             const argument = args[0];
             const url = argument === undefined ? undefined : (0, url_js_1.fromFold)(argument);
             if (url === undefined)
-                return (0, index_js_23.problem)('URL: the argument is not a URL structure');
+                return (0, index_js_24.problem)('URL: the argument is not a URL structure');
             const root = this.open.get((0, url_js_1.formatUrl)(url));
-            return root ?? (0, index_js_23.problem)(`URL(${(0, url_js_1.formatUrl)(url)}): nothing is open at that address`);
+            return root ?? (0, index_js_24.problem)(`URL(${(0, url_js_1.formatUrl)(url)}): nothing is open at that address`);
         }
     }
     exports.UrlService = UrlService;
@@ -13824,12 +14141,12 @@ define("os/service", ["require", "exports", "data/index", "patch/index", "os/url
         const registry = createRegistry();
         const url = new UrlService();
         registry.register(url.name, url);
-        for (const service of (0, index_js_23.standardServices)())
+        for (const service of (0, index_js_24.standardServices)())
             registry.register(service.name, service);
         return { registry, url };
     }
 });
-define("os/json", ["require", "exports", "data/index"], function (require, exports, index_js_24) {
+define("os/json", ["require", "exports", "data/index"], function (require, exports, index_js_25) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.JSON_FORMAT = void 0;
@@ -13890,25 +14207,25 @@ define("os/json", ["require", "exports", "data/index"], function (require, expor
      * to the same structure.
      */
     function formatJson(node) {
-        if (node instanceof index_js_24.Text)
+        if (node instanceof index_js_25.Text)
             return JSON.stringify(node.value);
-        if (node instanceof index_js_24.Quantity) {
+        if (node instanceof index_js_25.Quantity) {
             const characters = node.characters();
             return JSON_NUMBER.test(characters) ? characters : undefined;
         }
-        if (node instanceof index_js_24.Symbol) {
-            if (node.value === index_js_24.SymbolValue.True)
+        if (node instanceof index_js_25.Symbol) {
+            if (node.value === index_js_25.SymbolValue.True)
                 return 'true';
-            if (node.value === index_js_24.SymbolValue.False)
+            if (node.value === index_js_25.SymbolValue.False)
                 return 'false';
-            if (node.value === index_js_24.SymbolValue.Null)
+            if (node.value === index_js_25.SymbolValue.Null)
                 return 'null';
             return undefined;
         }
-        if (!(node instanceof index_js_24.List) || node.constructor !== index_js_24.List)
+        if (!(node instanceof index_js_25.List) || node.constructor !== index_js_25.List)
             return undefined;
         const children = node.children();
-        const object = children.length > 0 && children.every((child) => child instanceof index_js_24.Keyed && child.count() === 2 && child.key() instanceof index_js_24.Text);
+        const object = children.length > 0 && children.every((child) => child instanceof index_js_25.Keyed && child.count() === 2 && child.key() instanceof index_js_25.Text);
         const parts = [];
         for (const child of children) {
             if (object) {
@@ -13953,15 +14270,15 @@ define("os/json", ["require", "exports", "data/index"], function (require, expor
             if (next === '[')
                 return this.array();
             if (next === '"')
-                return new index_js_24.Text(this.string());
+                return new index_js_25.Text(this.string());
             if (next === '-' || (next !== undefined && next >= '0' && next <= '9'))
                 return this.number();
             if (this.word('true'))
-                return new index_js_24.Symbol(index_js_24.SymbolValue.True);
+                return new index_js_25.Symbol(index_js_25.SymbolValue.True);
             if (this.word('false'))
-                return new index_js_24.Symbol(index_js_24.SymbolValue.False);
+                return new index_js_25.Symbol(index_js_25.SymbolValue.False);
             if (this.word('null'))
-                return new index_js_24.Symbol(index_js_24.SymbolValue.Null);
+                return new index_js_25.Symbol(index_js_25.SymbolValue.Null);
             throw new Malformed();
         }
         object() {
@@ -13970,24 +14287,24 @@ define("os/json", ["require", "exports", "data/index"], function (require, expor
             this.space();
             if (this.text[this.at] === '}') {
                 this.at++;
-                return new index_js_24.List(pairs);
+                return new index_js_25.List(pairs);
             }
             for (;;) {
                 this.space();
                 if (this.text[this.at] !== '"')
                     throw new Malformed();
-                const key = new index_js_24.Text(this.string());
+                const key = new index_js_25.Text(this.string());
                 this.space();
                 this.expect(':');
                 this.space();
-                pairs.push(new index_js_24.Keyed([key, this.value()]));
+                pairs.push(new index_js_25.Keyed([key, this.value()]));
                 this.space();
                 if (this.text[this.at] === ',') {
                     this.at++;
                     continue;
                 }
                 this.expect('}');
-                return new index_js_24.List(pairs);
+                return new index_js_25.List(pairs);
             }
         }
         array() {
@@ -13996,7 +14313,7 @@ define("os/json", ["require", "exports", "data/index"], function (require, expor
             this.space();
             if (this.text[this.at] === ']') {
                 this.at++;
-                return new index_js_24.List(items);
+                return new index_js_25.List(items);
             }
             for (;;) {
                 this.space();
@@ -14007,7 +14324,7 @@ define("os/json", ["require", "exports", "data/index"], function (require, expor
                     continue;
                 }
                 this.expect(']');
-                return new index_js_24.List(items);
+                return new index_js_25.List(items);
             }
         }
         string() {
@@ -14053,12 +14370,12 @@ define("os/json", ["require", "exports", "data/index"], function (require, expor
             if (match[2] === undefined && match[3] === undefined) {
                 const whole = BigInt(match[0]);
                 const small = Number(whole);
-                return index_js_24.Quantity.narrowest(Number.isSafeInteger(small) ? small : whole);
+                return index_js_25.Quantity.narrowest(Number.isSafeInteger(small) ? small : whole);
             }
             const value = Number(match[0]);
             if (!Number.isFinite(value))
                 throw new Malformed();
-            return index_js_24.Quantity.narrowest(value);
+            return index_js_25.Quantity.narrowest(value);
         }
         word(word) {
             if (!this.text.startsWith(word, this.at))
@@ -14191,7 +14508,7 @@ define("os/csv", ["require", "exports"], function (require, exports) {
     /** The same, for a table read from tab-separated text. */
     exports.TSV_FORMAT = 'TSV';
 });
-define("os/files", ["require", "exports", "codec/index", "data/index", "internal/todo"], function (require, exports, index_js_25, index_js_26, todo_js_5) {
+define("os/files", ["require", "exports", "codec/index", "data/index", "internal/todo"], function (require, exports, index_js_26, index_js_27, todo_js_5) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.MemoryProvider = exports.FileSystemAccessProvider = void 0;
@@ -14280,12 +14597,12 @@ define("os/files", ["require", "exports", "codec/index", "data/index", "internal
      */
     async function readDocument(handle) {
         const bytes = await handle.read();
-        const { root, diagnostics } = (0, index_js_25.decode)(bytes);
+        const { root, diagnostics } = (0, index_js_26.decode)(bytes);
         const url = {
-            scheme: new index_js_26.Text('file'),
-            host: new index_js_26.List(),
-            path: new index_js_26.List([new index_js_26.Text(handle.name)]),
-            query: new index_js_26.List(),
+            scheme: new index_js_27.Text('file'),
+            host: new index_js_27.List(),
+            path: new index_js_27.List([new index_js_27.Text(handle.name)]),
+            query: new index_js_27.List(),
             fragment: undefined,
         };
         return { handle, url, source: root, bytes, diagnostics };
@@ -14310,7 +14627,7 @@ define("os/files", ["require", "exports", "codec/index", "data/index", "internal
         if (!sameBytes(current, target.opened)) {
             throw new Error(`${effect.label}: ${target.handle.name} changed since it was opened`);
         }
-        const bytes = (0, index_js_25.encode)(target.document);
+        const bytes = (0, index_js_26.encode)(target.document);
         await target.handle.write(bytes);
         return bytes;
     }
@@ -14399,7 +14716,7 @@ define("os/index", ["require", "exports", "os/service", "os/url", "os/json", "os
     Object.defineProperty(exports, "openDocument", { enumerable: true, get: function () { return files_js_1.openDocument; } });
     Object.defineProperty(exports, "readDocument", { enumerable: true, get: function () { return files_js_1.readDocument; } });
 });
-define("editor/typing", ["require", "exports", "data/index", "patch/executor", "patch/runtime-values", "patch/instruction", "patch/minimal-path", "patch/opcode", "data/graphemes"], function (require, exports, index_js_27, executor_js_8, runtime_values_js_6, instruction_js_9, minimal_path_js_4, opcode_js_10, graphemes_js_2) {
+define("editor/typing", ["require", "exports", "data/index", "patch/executor", "patch/runtime-values", "patch/instruction", "patch/minimal-path", "patch/opcode", "data/graphemes"], function (require, exports, index_js_28, executor_js_8, runtime_values_js_6, instruction_js_10, minimal_path_js_5, opcode_js_11, graphemes_js_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.LINES_FORMAT = void 0;
@@ -14449,13 +14766,13 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
      * they are computed twice they are two.
      */
     function characterText(node) {
-        if (node instanceof index_js_27.Text)
+        if (node instanceof index_js_28.Text)
             return node.value;
         // A number drawn grouped presents its separators to the caret as characters,
         // because they are on the glass - `data/thousands.ts`.
-        if (node instanceof index_js_27.Quantity)
-            return (0, index_js_27.grouped)(node) ? (0, index_js_27.withThousands)(node.characters()) : node.characters();
-        if (node instanceof index_js_27.Symbol)
+        if (node instanceof index_js_28.Quantity)
+            return (0, index_js_28.grouped)(node) ? (0, index_js_28.withThousands)(node.characters()) : node.characters();
+        if (node instanceof index_js_28.Symbol)
             return symbolWord(node.value);
         return undefined;
     }
@@ -14472,9 +14789,9 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         const promoted = promote(typed) ?? promoteSymbol(typed);
         if (promoted !== undefined)
             return promoted;
-        const bare = (0, index_js_27.withoutThousands)(typed);
+        const bare = (0, index_js_28.withoutThousands)(typed);
         const number = bare === undefined ? undefined : promote(bare);
-        return number !== undefined ? (0, index_js_27.markedThousands)(number) : new index_js_27.Text(typed);
+        return number !== undefined ? (0, index_js_28.markedThousands)(number) : new index_js_28.Text(typed);
     }
     /**
      * The symbols a word can be typed as (Chris, 2026-09-26), on the ladder's own
@@ -14488,13 +14805,13 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
      * "Problem" open sentences, and a Problem typed by hand would carry no cause.
      * Capitalised only, because that is the spelling; `true` is a word.
      */
-    const TYPED_SYMBOLS = [index_js_27.SymbolValue.True, index_js_27.SymbolValue.False, index_js_27.SymbolValue.Void, index_js_27.SymbolValue.Null];
+    const TYPED_SYMBOLS = [index_js_28.SymbolValue.True, index_js_28.SymbolValue.False, index_js_28.SymbolValue.Void, index_js_28.SymbolValue.Null];
     function symbolWord(value) {
-        return TYPED_SYMBOLS.includes(value) ? index_js_27.SYMBOL_GLYPH[value] : undefined;
+        return TYPED_SYMBOLS.includes(value) ? index_js_28.SYMBOL_GLYPH[value] : undefined;
     }
     function promoteSymbol(typed) {
-        const value = TYPED_SYMBOLS.find((candidate) => index_js_27.SYMBOL_GLYPH[candidate] === typed);
-        return value === undefined ? undefined : new index_js_27.Symbol(value);
+        const value = TYPED_SYMBOLS.find((candidate) => index_js_28.SYMBOL_GLYPH[candidate] === typed);
+        return value === undefined ? undefined : new index_js_28.Symbol(value);
     }
     /**
      * Spacebar creates a new element instead of writing a space character, so
@@ -14542,7 +14859,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         // two spaces, and the whole of how nesting is typed.
         if (plainList(focus) && focus.count() === 0 && selection.position().offset === undefined) {
             return {
-                edits: [{ site: { node: focus, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: [new index_js_27.List()] }],
+                edits: [{ site: { node: focus, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: [new index_js_28.List()] }],
                 revises: false,
                 opens: true,
                 caret: { parent: focus, index: 0, offset: undefined },
@@ -14551,10 +14868,10 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         // At the root, or on anything with no seat: there is no "after" to create an
         // element at, so the new one goes inside.
         if (site === undefined) {
-            if (!(focus instanceof index_js_27.List))
+            if (!(focus instanceof index_js_28.List))
                 return undefined;
             return {
-                edits: [{ site: { node: focus, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: [new index_js_27.List()] }],
+                edits: [{ site: { node: focus, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: [new index_js_28.List()] }],
                 revises: false,
                 opens: true,
                 caret: { parent: focus, index: focus.count(), offset: undefined },
@@ -14584,12 +14901,12 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         // already there, and recording `write("The")` over `"The"` would put a
         // statement with no effect into a program whose readability is the point.
         if (head !== undefined && text !== undefined && head !== text) {
-            edits.push({ site: { node: focus, offset: undefined }, opcode: opcode_js_10.Opcode.Write, arguments: [tokenValue(head)] });
+            edits.push({ site: { node: focus, offset: undefined }, opcode: opcode_js_11.Opcode.Write, arguments: [tokenValue(head)] });
         }
         // Nothing after the caret is the ordinary case - the end of a word - and what
         // it seats is the empty List the next word will be typed into.
         const empty = tail === '';
-        edits.push(seatAfter(site.parent, site.index, empty ? new index_js_27.List() : tokenValue(tail)));
+        edits.push(seatAfter(site.parent, site.index, empty ? new index_js_28.List() : tokenValue(tail)));
         return {
             edits,
             revises: false,
@@ -14643,7 +14960,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             // the value it parsed to.
             if (shortestRepresentation(whole) !== typed)
                 return undefined;
-            const quantity = index_js_27.Quantity.narrowest(narrow(whole));
+            const quantity = index_js_28.Quantity.narrowest(narrow(whole));
             // C2's own ceiling: "try 32-bit, then 40- or 64-bit, else stay text". The
             // library will spell any width (Quantity.narrowest); the editor's default
             // ladder stops at 64 bits, so a 200-digit account number stays the string
@@ -14653,7 +14970,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         const value = Number(typed);
         if (!Number.isFinite(value))
             return undefined;
-        const quantity = index_js_27.Quantity.narrowest(value);
+        const quantity = index_js_28.Quantity.narrowest(value);
         // The round trip is asked of the Quantity, not of the double it was parsed
         // from, because those two differ at the one rung where the ladder narrows:
         // `0.30000001192092896` names a double *and* names the Float32 the ladder
@@ -14717,7 +15034,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             return undefined;
         const focus = selection.focus();
         const site = selection.site();
-        const container = focus instanceof index_js_27.List && !selection.drawnAsValue();
+        const container = focus instanceof index_js_28.List && !selection.drawnAsValue();
         if (site === undefined) {
             if (!container)
                 return undefined;
@@ -14808,7 +15125,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             return insertText(selection, pasted);
         const focus = selection.focus();
         const site = selection.site();
-        const container = focus instanceof index_js_27.List && !selection.drawnAsValue();
+        const container = focus instanceof index_js_28.List && !selection.drawnAsValue();
         const span = selection.span();
         const range = selection.characterRange();
         const offset = selection.position().offset;
@@ -14861,18 +15178,18 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         // No write when the first token is unchanged - a paste starting with a space
         // at the end of a word leaves that word as it was.
         if (count > 1 || characterText(first) !== lead) {
-            edits.push({ site: { node: first, offset: undefined }, opcode: opcode_js_10.Opcode.Write, arguments: [tokenValue(lead)] });
+            edits.push({ site: { node: first, offset: undefined }, opcode: opcode_js_11.Opcode.Write, arguments: [tokenValue(lead)] });
         }
         if (rest.length > 0) {
             const tokens = rest.map(tokenValue);
             const after = parent.child(index + count);
             edits.push(after === undefined
-                ? { site: { node: parent, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: tokens }
-                : { site: { node: after, offset: undefined }, opcode: opcode_js_10.Opcode.Insert, arguments: tokens });
+                ? { site: { node: parent, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: tokens }
+                : { site: { node: after, offset: undefined }, opcode: opcode_js_11.Opcode.Insert, arguments: tokens });
         }
         const second = parent.child(index + 1);
         if (count > 1 && second !== undefined) {
-            edits.push({ site: { node: second, offset: undefined }, opcode: opcode_js_10.Opcode.Remove, arguments: removeCount(count - 1) });
+            edits.push({ site: { node: second, offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: removeCount(count - 1) });
         }
         if (edits.length === 0)
             return undefined;
@@ -14899,10 +15216,10 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         const lines = pasted.replace(/(\r\n|\r|\n)+$/, '').split(/\r\n|\r|\n/);
         if (lines.length < 2 || lines.every((line) => line.trim().length === 0))
             return undefined;
-        const value = new index_js_27.List(lines.map((line) => new index_js_27.List(line.includes('\t')
-            ? line.split('\t').map((cell) => (cell.length === 0 ? new index_js_27.List() : tokenValue(cell)))
+        const value = new index_js_28.List(lines.map((line) => new index_js_28.List(line.includes('\t')
+            ? line.split('\t').map((cell) => (cell.length === 0 ? new index_js_28.List() : tokenValue(cell)))
             : line.split(/\s+/).filter((word) => word.length > 0).map(tokenValue))));
-        value.metadata = new index_js_27.Metadata([new index_js_27.Keyed([new index_js_27.Text('format'), new index_js_27.Text(exports.LINES_FORMAT)])]);
+        value.metadata = new index_js_28.Metadata([new index_js_28.Keyed([new index_js_28.Text('format'), new index_js_28.Text(exports.LINES_FORMAT)])]);
         return value;
     }
     /** What pasted lines are tagged with - the stacked list face's format. */
@@ -14914,7 +15231,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         if (last === undefined)
             return undefined;
         return {
-            edits: [{ site: { node: list, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: tokens.map(tokenValue) }],
+            edits: [{ site: { node: list, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: tokens.map(tokenValue) }],
             revises: false,
             caret: { parent: list, index: list.count() + tokens.length - 1, offset: last.length },
         };
@@ -14954,9 +15271,9 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             return undefined;
         const focus = selection.focus();
         const site = selection.site();
-        if (focus instanceof index_js_27.List && !selection.drawnAsValue() && (site === undefined || focus.count() === 0)) {
+        if (focus instanceof index_js_28.List && !selection.drawnAsValue() && (site === undefined || focus.count() === 0)) {
             return {
-                edits: values.map((value) => ({ site: { node: focus, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: [value] })),
+                edits: values.map((value) => ({ site: { node: focus, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: [value] })),
                 revises: false,
                 caret: { parent: focus, index: focus.count() + values.length - 1, offset: undefined },
             };
@@ -14973,8 +15290,8 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         const next = parent.child(at);
         return {
             edits: next === undefined
-                ? values.map((value) => ({ site: { node: parent, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: [value] }))
-                : [...values].reverse().map((value) => ({ site: { node: next, offset: undefined }, opcode: opcode_js_10.Opcode.Insert, arguments: [value] })),
+                ? values.map((value) => ({ site: { node: parent, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: [value] }))
+                : [...values].reverse().map((value) => ({ site: { node: next, offset: undefined }, opcode: opcode_js_11.Opcode.Insert, arguments: [value] })),
             revises: false,
             caret: { parent, index: at + values.length - 1, offset: undefined },
         };
@@ -14995,7 +15312,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             return undefined;
         const { parent, index } = site;
         return {
-            edits: [{ site: { node: selection.focus(), offset: undefined }, opcode: opcode_js_10.Opcode.Remove, arguments: [] }],
+            edits: [{ site: { node: selection.focus(), offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: [] }],
             revises: false,
             caret: { parent, index: Math.max(Math.min(index, parent.count() - 2), 0), offset: undefined },
         };
@@ -15024,7 +15341,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             return text;
         if (plainList(node))
             return node.children().map(plainText).filter((part) => part.length > 0).join(' ');
-        return (0, instruction_js_9.formatData)(node);
+        return (0, instruction_js_10.formatData)(node);
     }
     /**
      * Backspace and delete, at whatever depth the cursor is on. "Delete at the
@@ -15077,7 +15394,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             // wherever the selection can still resolve when the list empties out.
             const landing = forward ? Math.min(index, parent.count() - 2) : index - 1;
             return {
-                edits: [{ site: { node: focus, offset: undefined }, opcode: opcode_js_10.Opcode.Remove, arguments: [] }],
+                edits: [{ site: { node: focus, offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: [] }],
                 revises: false,
                 caret: { parent, index: Math.max(landing, 0), offset: undefined },
             };
@@ -15108,8 +15425,8 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         // indices alone, so `next()` still reaches the token being absorbed.
         return {
             edits: [
-                { site: { node: survivor, offset: undefined }, opcode: opcode_js_10.Opcode.Write, arguments: [tokenValue(joined)] },
-                { site: { node: removed, offset: undefined }, opcode: opcode_js_10.Opcode.Remove, arguments: [] },
+                { site: { node: survivor, offset: undefined }, opcode: opcode_js_11.Opcode.Write, arguments: [tokenValue(joined)] },
+                { site: { node: removed, offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: [] },
             ],
             revises: false,
             caret: { parent, index: first, offset: forward ? text.length : neighbourText.length },
@@ -15158,7 +15475,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         // or a shift+arrow - carries on from where the reader left off.
         const focusFirst = focus.index === index;
         return {
-            edits: [{ site: { node: mover, offset: undefined }, opcode: opcode_js_10.Opcode.MoveBy, arguments: [(0, instruction_js_9.wholeNumber)(distance)] }],
+            edits: [{ site: { node: mover, offset: undefined }, opcode: opcode_js_11.Opcode.MoveBy, arguments: [(0, instruction_js_10.wholeNumber)(distance)] }],
             revises: false,
             caret: { parent, index: focusFirst ? start + count - 1 : start, offset: undefined },
             extend: count === 1 ? undefined : focusFirst ? -(count - 1) : count - 1,
@@ -15204,17 +15521,17 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         const first = parent.child(index);
         if (first === undefined)
             return undefined;
-        const wrapper = new index_js_27.List(parent.children().slice(index, index + count).map((child) => (0, executor_js_8.deepCopy)(child)));
+        const wrapper = new index_js_28.List(parent.children().slice(index, index + count).map((child) => (0, executor_js_8.deepCopy)(child)));
         // `seatAfter`'s dichotomy again, for the same reason: `insert` seats a value
         // at a cursor and a list has no cursor position past its last child.
         const after = parent.child(index + count);
         const seat = after === undefined
-            ? { site: { node: parent, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: [wrapper] }
-            : { site: { node: after, offset: undefined }, opcode: opcode_js_10.Opcode.Insert, arguments: [wrapper] };
+            ? { site: { node: parent, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: [wrapper] }
+            : { site: { node: after, offset: undefined }, opcode: opcode_js_11.Opcode.Insert, arguments: [wrapper] };
         return {
             edits: [
                 seat,
-                { site: { node: first, offset: undefined }, opcode: opcode_js_10.Opcode.Remove, arguments: removeCount(count) },
+                { site: { node: first, offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: removeCount(count) },
             ],
             revises: false,
             // On the new list, not inside it. The gesture made one thing; the cursor is
@@ -15270,7 +15587,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
     }
     /** A List that is only a List - not a Keyed pair, a Patch, or a Metadata container. */
     function plainList(node) {
-        return node instanceof index_js_27.List && node.constructor === index_js_27.List;
+        return node instanceof index_js_28.List && node.constructor === index_js_28.List;
     }
     /**
      * Replace the list at `parent[index]` with its children, leaving `count` of
@@ -15283,10 +15600,10 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         const lifted = list.children().map((child) => (0, executor_js_8.deepCopy)(child));
         const after = parent.child(index + 1);
         const seat = after === undefined
-            ? { site: { node: parent, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: lifted }
-            : { site: { node: after, offset: undefined }, opcode: opcode_js_10.Opcode.Insert, arguments: lifted };
+            ? { site: { node: parent, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: lifted }
+            : { site: { node: after, offset: undefined }, opcode: opcode_js_11.Opcode.Insert, arguments: lifted };
         return {
-            edits: [seat, { site: { node: list, offset: undefined }, opcode: opcode_js_10.Opcode.Remove, arguments: [] }],
+            edits: [seat, { site: { node: list, offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: [] }],
             revises: false,
             caret: { parent, index: index + from, offset },
             extend: count > 1 ? count - 1 : undefined,
@@ -15331,11 +15648,11 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         // Where the Patch will sit once the frame has run, which is what the path
         // inside it has to be true of - see `referencePath`.
         const index = site.index + 1;
-        const path = (0, minimal_path_js_4.referencePath)({ parent: site.parent, index }, copied);
+        const path = (0, minimal_path_js_5.referencePath)({ parent: site.parent, index }, copied);
         if (path === undefined)
             return undefined;
         return {
-            edits: [seatAfter(site.parent, site.index, new index_js_27.Patch([...path]))],
+            edits: [seatAfter(site.parent, site.index, new index_js_28.Patch([...path]))],
             revises: false,
             // On the reference, not inside it. Same landing as `wrapInList`'s and for
             // the same reason: the gesture made one thing and the cursor is on the
@@ -15353,7 +15670,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
      * consecutive removes was already the right shape for this.
      */
     function removeCount(count) {
-        return count === 1 ? [] : [(0, instruction_js_9.wholeNumber)(count)];
+        return count === 1 ? [] : [(0, instruction_js_10.wholeNumber)(count)];
     }
     /**
      * Take a run of siblings out, and leave the caret on what the removal leaves in
@@ -15368,7 +15685,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             return undefined;
         const remaining = parent.count() - count;
         return {
-            edits: [{ site: { node: first, offset: undefined }, opcode: opcode_js_10.Opcode.Remove, arguments: removeCount(count) }],
+            edits: [{ site: { node: first, offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: removeCount(count) }],
             revises: false,
             caret: { parent, index: Math.max(0, Math.min(index, remaining - 1)), offset: undefined },
         };
@@ -15394,10 +15711,10 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             return undefined;
         return {
             edits: [
-                { site: { node: first, offset: undefined }, opcode: opcode_js_10.Opcode.Write, arguments: [tokenValue(typed)] },
+                { site: { node: first, offset: undefined }, opcode: opcode_js_11.Opcode.Write, arguments: [tokenValue(typed)] },
                 {
                     site: { node: second, offset: undefined },
-                    opcode: opcode_js_10.Opcode.Remove,
+                    opcode: opcode_js_11.Opcode.Remove,
                     arguments: removeCount(count - 1),
                 },
             ],
@@ -15408,7 +15725,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
     /** Append a new token to a list and put the caret at the end of it. */
     function append(list, text) {
         return {
-            edits: [{ site: { node: list, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: [tokenValue(text)] }],
+            edits: [{ site: { node: list, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: [tokenValue(text)] }],
             revises: true,
             caret: { parent: list, index: list.count(), offset: text.length },
         };
@@ -15416,7 +15733,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
     /** Rewrite one token whole. What a typed edit takes when it changes its type. */
     function write(parent, index, focus, text, offset) {
         return {
-            edits: [{ site: { node: focus, offset: undefined }, opcode: opcode_js_10.Opcode.Write, arguments: [tokenValue(text)] }],
+            edits: [{ site: { node: focus, offset: undefined }, opcode: opcode_js_11.Opcode.Write, arguments: [tokenValue(text)] }],
             revises: true,
             caret: { parent, index, offset },
         };
@@ -15447,7 +15764,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         const number = thousandsSplice(parent, index, focus, text, from, to, put, next, offset);
         if (number !== undefined)
             return number;
-        if (!(focus instanceof index_js_27.Text) || !(tokenValue(next) instanceof index_js_27.Text)) {
+        if (!(focus instanceof index_js_28.Text) || !(tokenValue(next) instanceof index_js_28.Text)) {
             return write(parent, index, focus, next, offset);
         }
         const at = (0, graphemes_js_2.graphemeIndex)(text, from);
@@ -15456,8 +15773,8 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         if (removing > 0) {
             edits.push({
                 site: { node: focus, offset: from },
-                opcode: opcode_js_10.Opcode.Remove,
-                arguments: [(0, instruction_js_9.wholeNumber)(removing)],
+                opcode: opcode_js_11.Opcode.Remove,
+                arguments: [(0, instruction_js_10.wholeNumber)(removing)],
             });
         }
         if (put.length > 0) {
@@ -15466,8 +15783,8 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             // the same reason.
             const remaining = (0, graphemes_js_2.graphemeCount)(text) - removing;
             edits.push(at < remaining
-                ? { site: { node: focus, offset: from }, opcode: opcode_js_10.Opcode.Insert, arguments: [new index_js_27.Text(put)] }
-                : { site: { node: focus, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: [new index_js_27.Text(put)] });
+                ? { site: { node: focus, offset: from }, opcode: opcode_js_11.Opcode.Insert, arguments: [new index_js_28.Text(put)] }
+                : { site: { node: focus, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: [new index_js_28.Text(put)] });
         }
         // A lone *removal* does not revise: `revises` claims this rewrites the whole
         // value of a token being typed, and taking a letter off does not - it is the
@@ -15475,7 +15792,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         // the layer that knows what the gesture was. Both are kept, because the two
         // answer to different callers.
         const only = edits.length === 1 ? edits[0] : undefined;
-        return { edits, revises: only !== undefined && only.opcode !== opcode_js_10.Opcode.Remove, caret: { parent, index, offset } };
+        return { edits, revises: only !== undefined && only.opcode !== opcode_js_11.Opcode.Remove, caret: { parent, index, offset } };
     }
     /**
      * A character edit that leaves, or makes, a number spelled with thousands
@@ -15500,35 +15817,35 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
      * separators-as-characters design exists for.
      */
     function thousandsSplice(parent, index, focus, text, from, to, put, next, offset) {
-        const writing = (value) => ({ site: { node: focus, offset: undefined }, opcode: opcode_js_10.Opcode.Write, arguments: [value] });
-        const caretIn = (drawn) => offset === undefined ? undefined : (0, index_js_27.caretByDigits)(next, offset, drawn);
-        if ((0, index_js_27.grouped)(focus) && !put.includes(index_js_27.SEPARATOR)) {
-            const bare = (0, index_js_27.withoutSeparators)(next);
+        const writing = (value) => ({ site: { node: focus, offset: undefined }, opcode: opcode_js_11.Opcode.Write, arguments: [value] });
+        const caretIn = (drawn) => offset === undefined ? undefined : (0, index_js_28.caretByDigits)(next, offset, drawn);
+        if ((0, index_js_28.grouped)(focus) && !put.includes(index_js_28.SEPARATOR)) {
+            const bare = (0, index_js_28.withoutSeparators)(next);
             const value = promote(bare);
             if (value === undefined)
                 return undefined;
-            const separatorGone = put === '' && text.slice(from, to).includes(index_js_27.SEPARATOR);
+            const separatorGone = put === '' && text.slice(from, to).includes(index_js_28.SEPARATOR);
             if (separatorGone) {
-                const entry = (0, index_js_27.faceEntry)(focus);
+                const entry = (0, index_js_28.faceEntry)(focus);
                 const edits = [];
-                if (entry !== undefined && (0, index_js_27.hints)(focus, index_js_27.THOUSANDS)) {
-                    edits.push({ site: { node: entry, offset: undefined }, opcode: opcode_js_10.Opcode.Remove, arguments: [] });
+                if (entry !== undefined && (0, index_js_28.hints)(focus, index_js_28.THOUSANDS)) {
+                    edits.push({ site: { node: entry, offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: [] });
                 }
                 edits.push(writing(value));
                 return { edits, revises: false, caret: { parent, index, offset: caretIn(bare) } };
             }
-            if ((0, index_js_27.faceEntry)(focus) === undefined)
-                (0, index_js_27.markedThousands)(value);
-            return { edits: [writing(value)], revises: true, caret: { parent, index, offset: caretIn((0, index_js_27.withThousands)(bare)) } };
+            if ((0, index_js_28.faceEntry)(focus) === undefined)
+                (0, index_js_28.markedThousands)(value);
+            return { edits: [writing(value)], revises: true, caret: { parent, index, offset: caretIn((0, index_js_28.withThousands)(bare)) } };
         }
-        const bare = (0, index_js_27.withoutThousands)(next);
+        const bare = (0, index_js_28.withoutThousands)(next);
         const value = bare === undefined ? undefined : promote(bare);
         if (bare === undefined || value === undefined)
             return undefined;
-        const standing = (0, index_js_27.faceEntry)(focus) !== undefined;
+        const standing = (0, index_js_28.faceEntry)(focus) !== undefined;
         if (!standing)
-            (0, index_js_27.markedThousands)(value);
-        const drawn = !standing || (0, index_js_27.hints)(focus, index_js_27.THOUSANDS) ? (0, index_js_27.withThousands)(bare) : bare;
+            (0, index_js_28.markedThousands)(value);
+        const drawn = !standing || (0, index_js_28.hints)(focus, index_js_28.THOUSANDS) ? (0, index_js_28.withThousands)(bare) : bare;
         return { edits: [writing(value)], revises: true, caret: { parent, index, offset: caretIn(drawn) } };
     }
     /**
@@ -15596,9 +15913,9 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
     function seatAfter(parent, index, value) {
         const following = parent.child(index + 1);
         if (following === undefined) {
-            return { site: { node: parent, offset: undefined }, opcode: opcode_js_10.Opcode.Append, arguments: [value] };
+            return { site: { node: parent, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: [value] };
         }
-        return { site: { node: following, offset: undefined }, opcode: opcode_js_10.Opcode.Insert, arguments: [value] };
+        return { site: { node: following, offset: undefined }, opcode: opcode_js_11.Opcode.Insert, arguments: [value] };
     }
     /**
      * Backspace on an empty List: the inverse of the spacebar that made it.
@@ -15611,15 +15928,15 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
      * back too.
      */
     function unspace(selection, parent, index, focus) {
-        const edits = [{ site: { node: focus, offset: undefined }, opcode: opcode_js_10.Opcode.Remove, arguments: [] }];
+        const edits = [{ site: { node: focus, offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: [] }];
         const before = parent.child(index - 1);
         if (before !== undefined) {
             return { edits, revises: false, caret: { parent, index: index - 1, offset: characterText(before)?.length } };
         }
         const path = selection.path();
         const outer = path[path.length - 3];
-        const seat = outer instanceof index_js_27.List ? outer.indexOf(parent) : -1;
-        if (outer instanceof index_js_27.List && seat >= 0) {
+        const seat = outer instanceof index_js_28.List ? outer.indexOf(parent) : -1;
+        if (outer instanceof index_js_28.List && seat >= 0) {
             return { edits, revises: false, caret: { parent: outer, index: seat, offset: undefined } };
         }
         return { edits, revises: false, caret: { parent, index: 0, offset: undefined } };
@@ -15652,43 +15969,43 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         const span = selection.span();
         const alone = span === undefined || span.count <= 1;
         const leafHolder = path[path.length - 2];
-        if (alone && !(focus instanceof index_js_27.List) && leafHolder instanceof index_js_27.List) {
+        if (alone && !(focus instanceof index_js_28.List) && leafHolder instanceof index_js_28.List) {
             const index = leafHolder.indexOf(focus);
             if (index < 0)
                 return undefined;
             return {
                 edits: [{
                         site: { node: focus, offset: undefined },
-                        opcode: opcode_js_10.Opcode.Write,
-                        arguments: [new index_js_27.Keyed([(0, executor_js_8.deepCopy)(focus), new index_js_27.List()])],
+                        opcode: opcode_js_11.Opcode.Write,
+                        arguments: [new index_js_28.Keyed([(0, executor_js_8.deepCopy)(focus), new index_js_28.List()])],
                     }],
                 revises: false,
                 caret: { parent: leafHolder, index, offset: undefined, within: [1] },
             };
         }
-        let at = focus instanceof index_js_27.List && offset === undefined ? path.length - 1 : path.length - 2;
+        let at = focus instanceof index_js_28.List && offset === undefined ? path.length - 1 : path.length - 2;
         for (; at >= 1; at--) {
             const node = path[at];
-            if (node === undefined || node instanceof index_js_27.Metadata)
+            if (node === undefined || node instanceof index_js_28.Metadata)
                 return undefined;
             if (kinded(node))
                 break;
         }
         const target = path[at];
         const holder = path[at - 1];
-        if (at < 1 || target === undefined || !kinded(target) || !(holder instanceof index_js_27.List))
+        if (at < 1 || target === undefined || !kinded(target) || !(holder instanceof index_js_28.List))
             return undefined;
         const index = holder.indexOf(target);
         if (index < 0)
             return undefined;
         const children = target.children().map((child) => (0, executor_js_8.deepCopy)(child));
-        const replacement = target instanceof index_js_27.Patch ? new index_js_27.List(children)
-            : target instanceof index_js_27.Keyed ? new index_js_27.Patch(children)
-                : new index_js_27.Keyed(children);
-        if (target instanceof index_js_27.Patch) {
+        const replacement = target instanceof index_js_28.Patch ? new index_js_28.List(children)
+            : target instanceof index_js_28.Keyed ? new index_js_28.Patch(children)
+                : new index_js_28.Keyed(children);
+        if (target instanceof index_js_28.Patch) {
             // What was below it was its value, which is not what its children now are.
             return {
-                edits: [{ site: { node: target, offset: undefined }, opcode: opcode_js_10.Opcode.Write, arguments: [replacement] }],
+                edits: [{ site: { node: target, offset: undefined }, opcode: opcode_js_11.Opcode.Write, arguments: [replacement] }],
                 revises: false,
                 caret: { parent: holder, index, offset: undefined, within: [] },
             };
@@ -15699,7 +16016,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         for (let step = at + 1; step < path.length; step++) {
             const parent = path[step - 1];
             const child = path[step];
-            const index = parent instanceof index_js_27.List && child !== undefined ? parent.indexOf(child) : -1;
+            const index = parent instanceof index_js_28.List && child !== undefined ? parent.indexOf(child) : -1;
             if (index < 0) {
                 within.length = 0;
                 break;
@@ -15707,7 +16024,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             within.push(index);
         }
         return {
-            edits: [{ site: { node: target, offset: undefined }, opcode: opcode_js_10.Opcode.Write, arguments: [replacement] }],
+            edits: [{ site: { node: target, offset: undefined }, opcode: opcode_js_11.Opcode.Write, arguments: [replacement] }],
             revises: false,
             caret: { parent: holder, index, offset: within.length > 0 ? offset : undefined, within },
         };
@@ -15735,12 +16052,12 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
             const node = path[at];
             if (node !== undefined && plainList(node))
                 break;
-            if (node instanceof index_js_27.Patch || node instanceof index_js_27.Metadata)
+            if (node instanceof index_js_28.Patch || node instanceof index_js_28.Metadata)
                 return undefined;
         }
         const target = path[at];
         const holder = path[at - 1];
-        if (at < 1 || target === undefined || !plainList(target) || !(holder instanceof index_js_27.List))
+        if (at < 1 || target === undefined || !plainList(target) || !(holder instanceof index_js_28.List))
             return undefined;
         const index = holder.indexOf(target);
         if (index < 0)
@@ -15748,8 +16065,8 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         return {
             edits: [{
                     site: { node: target, offset: undefined },
-                    opcode: opcode_js_10.Opcode.Write,
-                    arguments: [new index_js_27.Patch(target.children().map((child) => (0, executor_js_8.deepCopy)(child)))],
+                    opcode: opcode_js_11.Opcode.Write,
+                    arguments: [new index_js_28.Patch(target.children().map((child) => (0, executor_js_8.deepCopy)(child)))],
                 }],
             revises: false,
             caret: { parent: holder, index, offset: undefined, within: [] },
@@ -15775,7 +16092,7 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
         return {
             edits: [{
                     site: { node: selection.focus(), offset: undefined },
-                    opcode: opcode_js_10.Opcode.Write,
+                    opcode: opcode_js_11.Opcode.Write,
                     arguments: [(0, executor_js_8.deepCopy)(value)],
                 }],
             revises: false,
@@ -15801,10 +16118,10 @@ define("editor/typing", ["require", "exports", "data/index", "patch/executor", "
     }
     /** A container ctrl+; can change the kind of. */
     function kinded(node) {
-        return node instanceof index_js_27.Keyed || node instanceof index_js_27.Patch || plainList(node);
+        return node instanceof index_js_28.Keyed || node instanceof index_js_28.Patch || plainList(node);
     }
 });
-define("editor/selection", ["require", "exports", "data/cursor", "data/index", "data/graphemes", "editor/typing"], function (require, exports, cursor_js_5, index_js_28, graphemes_js_3, typing_js_1) {
+define("editor/selection", ["require", "exports", "data/cursor", "data/index", "data/graphemes", "editor/typing"], function (require, exports, cursor_js_5, index_js_29, graphemes_js_3, typing_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.Selection = void 0;
@@ -15926,7 +16243,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
          * value nineteen steps evaluate to rather than into step one.
          */
         readingOf(node) {
-            if (!(node instanceof index_js_28.Patch) || node === this.root)
+            if (!(node instanceof index_js_29.Patch) || node === this.root)
                 return undefined;
             return this.reading?.(node);
         }
@@ -15975,7 +16292,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
             this.prune();
             const path = [this.root];
             for (const tier of this.tiers) {
-                const next = (0, index_js_28.nodeOf)(tier, this.reading);
+                const next = (0, index_js_29.nodeOf)(tier, this.reading);
                 if (next === undefined)
                     break;
                 path.push(next);
@@ -16032,7 +16349,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
         /** One ordinary tier down, or into the characters of a leaf that has them. */
         descend(index) {
             const node = this.focus();
-            if (node instanceof index_js_28.List) {
+            if (node instanceof index_js_29.List) {
                 if (!Number.isInteger(index) || index < 0 || index >= node.count())
                     return false;
                 this.tiers.push({ kind: 'child', parent: node, index });
@@ -16135,7 +16452,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
             const metadata = owner.metadata;
             if (metadata === undefined)
                 return false;
-            const index = (0, index_js_28.storedIndexOfChannel)(metadata, channel);
+            const index = (0, index_js_29.storedIndexOfChannel)(metadata, channel);
             if (index === undefined)
                 return false;
             this.tiers.push({ kind: 'metadata', owner }, { kind: 'child', parent: metadata, index });
@@ -16267,7 +16584,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
             const anchor = this.anchor;
             if (offset === undefined || anchor?.offset === undefined)
                 return undefined;
-            if ((0, index_js_28.resolveTiers)(this.root, anchor.tiers, this.reading).node !== this.focus())
+            if ((0, index_js_29.resolveTiers)(this.root, anchor.tiers, this.reading).node !== this.focus())
                 return undefined;
             const from = Math.min(offset, anchor.offset);
             const to = Math.max(offset, anchor.offset);
@@ -16405,11 +16722,11 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
                 if (at.metadata === node) {
                     tiers.push({ kind: 'metadata', owner: at });
                 }
-                else if (at instanceof index_js_28.Patch && this.readingOf(at) === node) {
+                else if (at instanceof index_js_29.Patch && this.readingOf(at) === node) {
                     tiers.push({ kind: 'result', patch: at });
                 }
                 else {
-                    if (!(at instanceof index_js_28.List))
+                    if (!(at instanceof index_js_29.List))
                         return false;
                     const index = at.indexOf(node);
                     if (index < 0)
@@ -16527,7 +16844,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
             const value = this.readingOf(patch);
             if (value === undefined || value === patch)
                 return undefined;
-            return (0, index_js_28.tiersTo)(this.root, value) === undefined ? undefined : value;
+            return (0, index_js_29.tiersTo)(this.root, value) === undefined ? undefined : value;
         }
         /**
          * Put the cursor on a node, wherever in the document it lives.
@@ -16539,7 +16856,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
          * was not looking at its home.
          */
         placeOn(node) {
-            const tiers = (0, index_js_28.tiersTo)(this.root, node);
+            const tiers = (0, index_js_29.tiersTo)(this.root, node);
             if (tiers === undefined)
                 return false;
             this.anchor = undefined;
@@ -16549,7 +16866,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
         }
         /** Seat the cursor on what `patch` is drawn as, where `patch` is drawn. */
         placeInReading(patch, offset) {
-            const above = (0, index_js_28.tiersTo)(this.root, patch);
+            const above = (0, index_js_29.tiersTo)(this.root, patch);
             if (above === undefined || this.readingOf(patch) === undefined)
                 return false;
             this.anchor = undefined;
@@ -16564,7 +16881,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
             return true;
         }
         placeAt(parent, index, offset) {
-            const above = (0, index_js_28.tiersTo)(this.root, parent);
+            const above = (0, index_js_29.tiersTo)(this.root, parent);
             if (above === undefined)
                 return false;
             if (!Number.isInteger(index) || index < 0 || index >= parent.count())
@@ -16585,7 +16902,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
             const anchor = this.anchor;
             if (anchor === undefined)
                 return undefined;
-            return { node: (0, index_js_28.resolveTiers)(this.root, anchor.tiers).node, offset: anchor.offset };
+            return { node: (0, index_js_29.resolveTiers)(this.root, anchor.tiers).node, offset: anchor.offset };
         }
         // -------------------------------------------------------------------------
         /** Sibling movement, without clearing the anchor - `extend` needs both halves. */
@@ -16630,7 +16947,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
          * is always available and never invents a position the user did not choose.
          */
         resolve() {
-            return (0, index_js_28.resolveTiers)(this.root, this.tiers, this.reading);
+            return (0, index_js_29.resolveTiers)(this.root, this.tiers, this.reading);
         }
         /**
          * Write the cursor's present place into the memory `resumeIndex` reads.
@@ -16704,7 +17021,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
     function atBottom(node, offset) {
         if (offset !== undefined)
             return true;
-        if (node instanceof index_js_28.List)
+        if (node instanceof index_js_29.List)
             return node.count() === 0;
         return (0, typing_js_1.characterText)(node) === undefined;
     }
@@ -16744,7 +17061,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
         let holder = parent;
         let at = index;
         let current = node;
-        while (current instanceof index_js_28.List && current.count() > 0) {
+        while (current instanceof index_js_29.List && current.count() > 0) {
             const step = forward ? 0 : current.count() - 1;
             const child = current.child(step);
             if (child === undefined)
@@ -16763,7 +17080,7 @@ define("editor/selection", ["require", "exports", "data/cursor", "data/index", "
         };
     }
 });
-define("editor/converters", ["require", "exports", "codec/encode", "codec/index", "data/index", "patch/executor", "os/index", "patch/instruction", "patch/opcode", "view/index", "editor/typing"], function (require, exports, encode_js_3, index_js_29, index_js_30, executor_js_9, index_js_31, instruction_js_10, opcode_js_11, index_js_32, typing_js_2) {
+define("editor/converters", ["require", "exports", "codec/encode", "codec/index", "data/index", "patch/executor", "os/index", "patch/instruction", "patch/opcode", "view/index", "editor/typing"], function (require, exports, encode_js_3, index_js_30, index_js_31, executor_js_9, index_js_32, instruction_js_11, opcode_js_12, index_js_33, typing_js_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.CONVERTERS = exports.TEXT_CONVERTER = exports.DEDUPLICATE_CONVERTER = exports.SPLIT_CONVERTER = exports.HEX_CONVERTER = exports.BASE64_CONVERTER = exports.TSV_CONVERTER = exports.CSV_CONVERTER = exports.JSON_CONVERTER = exports.URL_CONVERTER = void 0;
@@ -16793,7 +17110,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
         name: 'URL',
         convert(nodes) {
             const [node] = nodes;
-            if (nodes.length !== 1 || !(node instanceof index_js_30.Text))
+            if (nodes.length !== 1 || !(node instanceof index_js_31.Text))
                 return undefined;
             const text = node.value;
             if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text) && !/^(mailto|tel|urn):./i.test(text))
@@ -16801,10 +17118,10 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
             const address = standard(text);
             if (address === undefined)
                 return undefined;
-            const parsed = (0, index_js_31.parseUrl)(text);
-            if (standard((0, index_js_31.formatUrl)(parsed)) !== address)
+            const parsed = (0, index_js_32.parseUrl)(text);
+            if (standard((0, index_js_32.formatUrl)(parsed)) !== address)
                 return undefined;
-            return formatted((0, index_js_31.toFold)(parsed), index_js_31.URL_FORMAT);
+            return formatted((0, index_js_32.toFold)(parsed), index_js_32.URL_FORMAT);
         },
     };
     /**
@@ -16830,8 +17147,8 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
             const text = spelledAcross(nodes, ' ');
             if (text === undefined || !/^\s*[[{]/.test(text))
                 return undefined;
-            const folded = (0, index_js_31.parseJson)(text);
-            return folded === undefined ? undefined : formatted(folded, index_js_31.JSON_FORMAT);
+            const folded = (0, index_js_32.parseJson)(text);
+            return folded === undefined ? undefined : formatted(folded, index_js_32.JSON_FORMAT);
         },
     };
     /**
@@ -16860,7 +17177,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
      * what the RFC asks of a file and what a spreadsheet always writes. A file that
      * breaks either is refused rather than drawn as a table with holes in it.
      */
-    exports.CSV_CONVERTER = delimited('CSV', ',', index_js_31.CSV_FORMAT);
+    exports.CSV_CONVERTER = delimited('CSV', ',', index_js_32.CSV_FORMAT);
     /**
      * TSV - what a spreadsheet puts on the clipboard when cells are copied - folded
      * into a table exactly as CSV is, tagged `format: TSV`.
@@ -16872,14 +17189,14 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
      * holding a line break or a quote with CSV's rules, and `os/csv.ts` reads that
      * from a file; a paste cannot, because it has already broken the line there.
      */
-    exports.TSV_CONVERTER = delimited('TSV', '\t', index_js_31.TSV_FORMAT);
+    exports.TSV_CONVERTER = delimited('TSV', '\t', index_js_32.TSV_FORMAT);
     /** A converter reading rows of fields separated by `delimiter`. */
     function delimited(name, delimiter, format) {
         return {
             name,
             convert(nodes) {
                 const rows = tableRows(nodes, delimiter);
-                return rows === undefined ? undefined : formatted(new index_js_30.List(rows.map((row) => new index_js_30.List(row.map(field)))), format);
+                return rows === undefined ? undefined : formatted(new index_js_31.List(rows.map((row) => new index_js_31.List(row.map(field)))), format);
             },
             // The rows without the table: reading a file is a pass over its text, and
             // building a node per field is the part that costs, so a menu deciding
@@ -16896,12 +17213,12 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
         const [node] = nodes;
         if (nodes.length !== 1 || node === undefined)
             return undefined;
-        const text = node instanceof index_js_30.Text ? node.value
-            : node instanceof index_js_30.Bytes ? utf8(node.value)
+        const text = node instanceof index_js_31.Text ? node.value
+            : node instanceof index_js_31.Bytes ? utf8(node.value)
                 : pastedLines(node, delimiter === '\t' ? '\t' : ' ');
         if (text === undefined)
             return undefined;
-        const rows = (0, index_js_31.parseCsv)(text, delimiter, true);
+        const rows = (0, index_js_32.parseCsv)(text, delimiter, true);
         return rows === undefined || rows.length < 2 ? undefined : rows;
     }
     /**
@@ -16934,7 +17251,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
     }
     /** One CSV field as a value: an empty one is an empty Text, and the rest are what typing it would make. */
     function field(text) {
-        return text.length === 0 ? new index_js_30.Text('') : (0, typing_js_2.tokenValue)(text);
+        return text.length === 0 ? new index_js_31.Text('') : (0, typing_js_2.tokenValue)(text);
     }
     /** Bytes as UTF-8 text, or undefined when they are not UTF-8. */
     function utf8(bytes) {
@@ -16963,9 +17280,9 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
             if (text === undefined)
                 return undefined;
             for (const alphabet of ['base64', 'base64url']) {
-                const bytes = (0, index_js_31.fromBase64)(text, alphabet);
+                const bytes = (0, index_js_32.fromBase64)(text, alphabet);
                 if (bytes !== undefined)
-                    return formatted(new index_js_30.Bytes(bytes), alphabet);
+                    return formatted(new index_js_31.Bytes(bytes), alphabet);
             }
             return undefined;
         },
@@ -16990,7 +17307,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
             const digits = /^0[xX]/.test(text) ? text.slice(2) : text;
             if (!/^([0-9A-Fa-f]{2})+$/.test(digits))
                 return undefined;
-            return new index_js_30.Bytes((0, index_js_29.parseHex)(digits));
+            return new index_js_31.Bytes((0, index_js_30.parseHex)(digits));
         },
     };
     /**
@@ -17015,12 +17332,12 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
         name: 'Split on whitespace',
         convert(nodes) {
             const [node] = nodes;
-            if (nodes.length !== 1 || !(node instanceof index_js_30.Text))
+            if (nodes.length !== 1 || !(node instanceof index_js_31.Text))
                 return undefined;
             const words = node.value.split(/\s+/).filter((word) => word.length > 0);
             if (words.length < 2)
                 return undefined;
-            return new index_js_30.List(words.map(typing_js_2.tokenValue));
+            return new index_js_31.List(words.map(typing_js_2.tokenValue));
         },
     };
     /**
@@ -17139,11 +17456,11 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
                         return node;
                     if (!declared.has(node.value)) {
                         declared.add(node.value);
-                        const carrier = new index_js_30.Text(node.value);
-                        carrier.metadata = new index_js_30.Metadata([index_js_30.Quantity.narrowest(uid)]);
+                        const carrier = new index_js_31.Text(node.value);
+                        carrier.metadata = new index_js_31.Metadata([index_js_31.Quantity.narrowest(uid)]);
                         return carrier;
                     }
-                    return new index_js_30.Patch([index_js_30.Quantity.narrowest(uid)]);
+                    return new index_js_31.Patch([index_js_31.Quantity.narrowest(uid)]);
                 }
                 if (!isPlainList(node))
                     return node;
@@ -17153,7 +17470,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
                     return node;
                 // Unchanged children are copied, because a List adopts what it is built
                 // from and these are still in the document.
-                const copy = new index_js_30.List(rebuilt.map((child, at) => (child === original[at] ? (0, executor_js_9.deepCopy)(child) : child)));
+                const copy = new index_js_31.List(rebuilt.map((child, at) => (child === original[at] ? (0, executor_js_9.deepCopy)(child) : child)));
                 if (node.metadata !== undefined)
                     copy.metadata = (0, executor_js_9.deepCopy)(node.metadata);
                 return copy;
@@ -17168,18 +17485,18 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
     };
     /** A word Deduplicate may touch: a non-empty Text carrying no metadata. */
     function isPlainWord(node) {
-        return node instanceof index_js_30.Text && node.value.length > 0
+        return node instanceof index_js_31.Text && node.value.length > 0
             && (node.metadata === undefined || node.metadata.count() === 0);
     }
     function isPlainList(node) {
-        return node instanceof index_js_30.List && node.constructor === index_js_30.List;
+        return node instanceof index_js_31.List && node.constructor === index_js_31.List;
     }
     /** Every whole-number UID already in the document, shorthand or spelled out. */
     function uidsIn(node, found = new Set()) {
-        const carried = node.metadata?.channel(new index_js_30.Text(index_js_30.CHANNEL_UID))?.values()[0];
-        if (carried instanceof index_js_30.Quantity && carried.form !== 'float')
+        const carried = node.metadata?.channel(new index_js_31.Text(index_js_31.CHANNEL_UID))?.values()[0];
+        if (carried instanceof index_js_31.Quantity && carried.form !== 'float')
             found.add(carried.asNumber());
-        if (node instanceof index_js_30.List)
+        if (node instanceof index_js_31.List)
             for (const child of node.children())
                 uidsIn(child, found);
         return found;
@@ -17190,11 +17507,11 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
      * encoder that will write it.
      */
     function saves(word, times, uid) {
-        const plain = (0, encode_js_3.encodeSegment)(new index_js_30.Text(word)).length;
-        const carrier = new index_js_30.Text(word);
-        carrier.metadata = new index_js_30.Metadata([index_js_30.Quantity.narrowest(uid)]);
+        const plain = (0, encode_js_3.encodeSegment)(new index_js_31.Text(word)).length;
+        const carrier = new index_js_31.Text(word);
+        carrier.metadata = new index_js_31.Metadata([index_js_31.Quantity.narrowest(uid)]);
         const declaration = (0, encode_js_3.encodeSegment)(carrier).length;
-        const reference = (0, encode_js_3.encodeSegment)(new index_js_30.Patch([index_js_30.Quantity.narrowest(uid)])).length;
+        const reference = (0, encode_js_3.encodeSegment)(new index_js_31.Patch([index_js_31.Quantity.narrowest(uid)])).length;
         return declaration + (times - 1) * reference < times * plain;
     }
     /**
@@ -17221,7 +17538,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
             if (nodes.length !== 1 || node === undefined)
                 return undefined;
             const spelled = asText(node);
-            return spelled === undefined ? undefined : new index_js_30.Text(spelled);
+            return spelled === undefined ? undefined : new index_js_31.Text(spelled);
         },
         // A Byte Array always has a spelling, and spelling a dropped file as hex to
         // find that out is sixty megabytes of text for one grey-or-not.
@@ -17229,7 +17546,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
             const [node] = nodes;
             if (nodes.length !== 1 || node === undefined)
                 return false;
-            if (node instanceof index_js_30.Bytes)
+            if (node instanceof index_js_31.Bytes)
                 return node.value.length > 0;
             return asText(node) !== undefined;
         },
@@ -17270,7 +17587,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
         const converted = converter.convert(nodes, { document });
         if (converted === undefined)
             return undefined;
-        if (!(converted instanceof index_js_30.Data)) {
+        if (!(converted instanceof index_js_31.Data)) {
             const writes = seatWrites(parent, index, nodes, converted);
             if (writes === undefined)
                 return undefined;
@@ -17285,15 +17602,15 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
             return reseated(parent, index, count, first, converted);
         const edits = [{
                 site: { node: first, offset: undefined },
-                opcode: opcode_js_11.Opcode.Write,
+                opcode: opcode_js_12.Opcode.Write,
                 arguments: [withoutRepeats(converted, first)],
             }];
         const second = parent.child(index + 1);
         if (count > 1 && second !== undefined) {
             edits.push({
                 site: { node: second, offset: undefined },
-                opcode: opcode_js_11.Opcode.Remove,
-                arguments: count === 2 ? [] : [(0, instruction_js_10.wholeNumber)(count - 1)],
+                opcode: opcode_js_12.Opcode.Remove,
+                arguments: count === 2 ? [] : [(0, instruction_js_11.wholeNumber)(count - 1)],
             });
         }
         return { edits, revises: false, caret: { parent, index, offset: undefined } };
@@ -17350,7 +17667,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
             return undefined;
         const nodes = focus.children();
         const converted = converter.convert(nodes, { document });
-        if (converted === undefined || converted instanceof index_js_30.Data)
+        if (converted === undefined || converted instanceof index_js_31.Data)
             return undefined;
         const writes = seatWrites(focus, 0, nodes, converted);
         if (writes === undefined)
@@ -17384,8 +17701,8 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
     }
     /** The `format` entries of a value's metadata. */
     function formatEntries(node) {
-        return node.metadata?.children().filter((entry) => (entry instanceof index_js_30.Keyed && entry.child(0) instanceof index_js_30.Text
-            && entry.child(0).value.toLowerCase() === index_js_32.FORMAT_CHANNEL)) ?? [];
+        return node.metadata?.children().filter((entry) => (entry instanceof index_js_31.Keyed && entry.child(0) instanceof index_js_31.Text
+            && entry.child(0).value.toLowerCase() === index_js_33.FORMAT_CHANNEL)) ?? [];
     }
     /**
      * A conversion that replaces the value's format: the converted value is seated
@@ -17401,15 +17718,15 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
         const kept = (first.metadata?.children() ?? [])
             .filter((entry) => !formatEntries(first).includes(entry))
             .map((entry) => (0, executor_js_9.deepCopy)(entry));
-        converted.metadata = new index_js_30.Metadata([...kept, ...(converted.metadata?.children() ?? [])]);
+        converted.metadata = new index_js_31.Metadata([...kept, ...(converted.metadata?.children() ?? [])]);
         const after = parent.child(index + count);
         const seat = after === undefined
-            ? { site: { node: parent, offset: undefined }, opcode: opcode_js_11.Opcode.Append, arguments: [converted] }
-            : { site: { node: after, offset: undefined }, opcode: opcode_js_11.Opcode.Insert, arguments: [converted] };
+            ? { site: { node: parent, offset: undefined }, opcode: opcode_js_12.Opcode.Append, arguments: [converted] }
+            : { site: { node: after, offset: undefined }, opcode: opcode_js_12.Opcode.Insert, arguments: [converted] };
         return {
             edits: [
                 seat,
-                { site: { node: first, offset: undefined }, opcode: opcode_js_11.Opcode.Remove, arguments: count === 1 ? [] : [(0, instruction_js_10.wholeNumber)(count)] },
+                { site: { node: first, offset: undefined }, opcode: opcode_js_12.Opcode.Remove, arguments: count === 1 ? [] : [(0, instruction_js_11.wholeNumber)(count)] },
             ],
             revises: false,
             caret: { parent, index, offset: undefined },
@@ -17431,7 +17748,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
                 return;
             writes.push({
                 site: { node: seat, offset: undefined },
-                opcode: opcode_js_11.Opcode.Write,
+                opcode: opcode_js_12.Opcode.Write,
                 arguments: [withoutRepeats(value, seat)],
             });
         });
@@ -17454,38 +17771,38 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
         if (incoming === undefined || already === undefined)
             return converted;
         const kept = incoming.children().filter((entry) => !already.children().some((old) => old.equals(entry)));
-        converted.metadata = kept.length === 0 ? undefined : new index_js_30.Metadata(kept);
+        converted.metadata = kept.length === 0 ? undefined : new index_js_31.Metadata(kept);
         return converted;
     }
     /** One value as text, by what it says it is - see `TEXT_CONVERTER`. */
     function asText(node) {
-        const formats = (0, index_js_32.formatNames)(node);
-        if (formats.includes(index_js_31.URL_FORMAT.toLowerCase())) {
-            const url = (0, index_js_31.fromFold)(node);
+        const formats = (0, index_js_33.formatNames)(node);
+        if (formats.includes(index_js_32.URL_FORMAT.toLowerCase())) {
+            const url = (0, index_js_32.fromFold)(node);
             if (url !== undefined)
-                return (0, index_js_31.formatUrl)(url);
+                return (0, index_js_32.formatUrl)(url);
         }
-        if (formats.includes(index_js_31.JSON_FORMAT.toLowerCase())) {
-            const json = (0, index_js_31.formatJson)(node);
+        if (formats.includes(index_js_32.JSON_FORMAT.toLowerCase())) {
+            const json = (0, index_js_32.formatJson)(node);
             if (json !== undefined)
                 return json;
         }
-        for (const [format, delimiter] of [[index_js_31.CSV_FORMAT, ','], [index_js_31.TSV_FORMAT, '\t']]) {
+        for (const [format, delimiter] of [[index_js_32.CSV_FORMAT, ','], [index_js_32.TSV_FORMAT, '\t']]) {
             if (!formats.includes(format.toLowerCase()))
                 continue;
             const table = delimitedOf(node, delimiter);
             if (table !== undefined)
                 return table;
         }
-        if (node instanceof index_js_30.Bytes) {
+        if (node instanceof index_js_31.Bytes) {
             if (node.value.length === 0)
                 return undefined;
             const alphabet = formats.includes('base64url')
                 ? 'base64url'
                 : formats.includes('base64') ? 'base64' : undefined;
-            return alphabet === undefined ? (0, index_js_29.formatHex)(node.value).replace(/ /g, '') : (0, index_js_31.toBase64)(node.value, alphabet);
+            return alphabet === undefined ? (0, index_js_30.formatHex)(node.value).replace(/ /g, '') : (0, index_js_32.toBase64)(node.value, alphabet);
         }
-        if (node instanceof index_js_30.List && node.constructor === index_js_30.List && node.count() > 0) {
+        if (node instanceof index_js_31.List && node.constructor === index_js_31.List && node.count() > 0) {
             const words = [];
             for (const child of node.children()) {
                 const word = (0, typing_js_2.characterText)(child);
@@ -17505,11 +17822,11 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
      * should decide how to flatten one.
      */
     function delimitedOf(node, delimiter) {
-        if (!(node instanceof index_js_30.List))
+        if (!(node instanceof index_js_31.List))
             return undefined;
         const rows = [];
         for (const row of node.children()) {
-            if (!(row instanceof index_js_30.List))
+            if (!(row instanceof index_js_31.List))
                 return undefined;
             const fields = [];
             for (const cell of row.children()) {
@@ -17520,7 +17837,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
             }
             rows.push(fields);
         }
-        return (0, index_js_31.formatCsv)(rows, delimiter);
+        return (0, index_js_32.formatCsv)(rows, delimiter);
     }
     /** The characters of a run of tokens, joined by `separator`, or undefined if one has none. */
     function spelledAcross(nodes, separator) {
@@ -17535,7 +17852,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
     }
     /** Tag a converted value with the format it was read from. */
     function formatted(node, format) {
-        node.metadata = new index_js_30.Metadata([new index_js_30.Keyed([new index_js_30.Text('format'), new index_js_30.Text(format)])]);
+        node.metadata = new index_js_31.Metadata([new index_js_31.Keyed([new index_js_31.Text('format'), new index_js_31.Text(format)])]);
         return node;
     }
     /** The address a URL names, by the URL standard, or undefined when it names none. */
@@ -17548,7 +17865,7 @@ define("editor/converters", ["require", "exports", "codec/encode", "codec/index"
         }
     }
 });
-define("editor/history", ["require", "exports", "patch/index"], function (require, exports, index_js_33) {
+define("editor/history", ["require", "exports", "patch/index"], function (require, exports, index_js_34) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.History = void 0;
@@ -17602,7 +17919,7 @@ define("editor/history", ["require", "exports", "patch/index"], function (requir
                 this.did(step);
                 return;
             }
-            this.done[at] = (0, index_js_33.joinSteps)(last, step);
+            this.done[at] = (0, index_js_34.joinSteps)(last, step);
         }
         /** The step to take back, moved onto the redo side. Newest first. */
         undo() {
@@ -17625,7 +17942,7 @@ define("editor/history", ["require", "exports", "patch/index"], function (requir
     }
     exports.History = History;
 });
-define("editor/record", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_34, index_js_35) {
+define("editor/record", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_35, index_js_36) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.intoReading = intoReading;
@@ -17682,7 +17999,7 @@ define("editor/record", ["require", "exports", "data/index", "patch/index"], fun
      * case; it has no drawn-leaf case to have found the other one.
      */
     function intoReading(edit, reading, merging = true) {
-        const path = (0, index_js_35.pathWithin)(reading.value, edit.site.node);
+        const path = (0, index_js_36.pathWithin)(reading.value, edit.site.node);
         if (path === undefined)
             return undefined;
         // Character level is one more step of the same kind (2d), and forgetting it
@@ -17692,24 +18009,26 @@ define("editor/record", ["require", "exports", "data/index", "patch/index"], fun
         // `child(0) child(0)` - by the same `simplify` a session frame goes through.
         const into = edit.site.offset === undefined
             ? path
-            : (0, index_js_35.simplify)([...path, (0, index_js_35.writeOpcodeCall)(index_js_35.Opcode.Child, (0, index_js_35.wholeNumber)(characterIndex(edit.site)))]);
-        const call = (0, index_js_35.writeEditCall)(edit.opcode, ...edit.arguments);
-        const statement = into.length === 0 ? call : new index_js_34.List([...into, call]);
-        // A move of the element the reference's last statement just moved is that
-        // statement moved further (`mergeMoves`, 2026-09-12; and appends and meeting removals since 2026-11-20, `mergeStatements`): it is rewritten, or taken
-        // out when the two cancel, rather than a second statement appended.
-        const last = reading.patch.child(reading.patch.count() - 1);
-        const merged = merging && last !== undefined ? (0, index_js_35.mergeStatements)(last, statement) : undefined;
-        if (last !== undefined && merged !== undefined) {
-            return merged === null
-                ? { site: { node: last, offset: undefined }, opcode: index_js_35.Opcode.Remove, arguments: [] }
-                : { site: { node: last, offset: undefined }, opcode: index_js_35.Opcode.Write, arguments: [merged] };
-        }
+            : (0, index_js_36.simplify)([...path, (0, index_js_36.writeOpcodeCall)(index_js_36.Opcode.Child, (0, index_js_36.wholeNumber)(characterIndex(edit.site)))]);
+        // What the edit is, read before the statement is built: the two share the
+        // edit's arguments, and the statement, built last, is the one that keeps them.
+        const said = merging ? saidOf([edit], reading.value) : undefined;
+        const call = (0, index_js_36.writeEditCall)(edit.opcode, ...edit.arguments);
+        const statement = into.length === 0 ? call : new index_js_35.List([...into, call]);
+        // A statement that says more about what the reference's last statement said
+        // is folded into that one (`foldStatement`: moves since 2026-09-12, appends
+        // and meeting removals since 2026-11-20, and a value put then edited and a
+        // run of typing since 2026-11-27, all after the C++ editor's `folded`): it is
+        // rewritten, or taken out when the two cancel, rather than a second statement
+        // appended.
+        const folded = said === undefined ? undefined : offered(reading.patch, said, statement);
+        if (folded !== undefined)
+            return folded;
         // Appended rather than inserted, because a program is read in order and the
         // newest thing a person did is the last thing that happened to the value.
         return {
             site: { node: reading.patch, offset: undefined },
-            opcode: index_js_35.Opcode.Append,
+            opcode: index_js_36.Opcode.Append,
             arguments: [statement],
         };
     }
@@ -17741,9 +18060,14 @@ define("editor/record", ["require", "exports", "data/index", "patch/index"], fun
             // One keystroke, one statement - in a reading as in the session (Chris,
             // 2026-09-12). Typing over a selected character is a removal and an
             // insertion, and the reader did one thing.
+            // Typing over a selected character is a removal and an insertion at one
+            // place, and that may be more of what the last statement typed.
+            const said = merging && through.length > 1 ? saidOf(through, reading.value) : undefined;
             const together = through.length > 1 ? keystroke(through, reading) : undefined;
             if (together !== undefined) {
-                through = [together];
+                const statement = together.arguments[0];
+                const folded = said === undefined || statement === undefined ? undefined : offered(reading.patch, said, statement);
+                through = [folded ?? together];
                 continue;
             }
             const converted = [];
@@ -17774,7 +18098,7 @@ define("editor/record", ["require", "exports", "data/index", "patch/index"], fun
         const steps = [];
         let at = [];
         for (const edit of edits) {
-            const within = (0, index_js_35.hopsWithin)(reading.value, edit.site.node);
+            const within = (0, index_js_36.hopsWithin)(reading.value, edit.site.node);
             if (within === undefined)
                 return undefined;
             const hops = edit.site.offset === undefined ? within : [...within, characterIndex(edit.site)];
@@ -17785,17 +18109,60 @@ define("editor/record", ["require", "exports", "data/index", "patch/index"], fun
                 common++;
             const rise = at.length - common;
             if (rise > 0)
-                steps.push(rise === 1 ? (0, index_js_35.writeOpcodeCall)(index_js_35.Opcode.Parent) : (0, index_js_35.writeOpcodeCall)(index_js_35.Opcode.Parent, (0, index_js_35.wholeNumber)(rise)));
+                steps.push(rise === 1 ? (0, index_js_36.writeOpcodeCall)(index_js_36.Opcode.Parent) : (0, index_js_36.writeOpcodeCall)(index_js_36.Opcode.Parent, (0, index_js_36.wholeNumber)(rise)));
             const descent = hops.slice(common);
             if (descent.length > 0)
-                steps.push((0, index_js_35.writeOpcodeCall)(index_js_35.Opcode.Child, ...descent.map((hop) => (0, index_js_35.wholeNumber)(hop))));
-            steps.push((0, index_js_35.writeEditCall)(edit.opcode, ...edit.arguments));
+                steps.push((0, index_js_36.writeOpcodeCall)(index_js_36.Opcode.Child, ...descent.map((hop) => (0, index_js_36.wholeNumber)(hop))));
+            steps.push((0, index_js_36.writeEditCall)(edit.opcode, ...edit.arguments));
             at = hops;
         }
         return {
             site: { node: reading.patch, offset: undefined },
-            opcode: index_js_35.Opcode.Append,
-            arguments: [new index_js_34.List([...(0, index_js_35.simplify)(steps)])],
+            opcode: index_js_36.Opcode.Append,
+            arguments: [new index_js_35.List([...(0, index_js_36.simplify)(steps)])],
+        };
+    }
+    /**
+     * `said` offered to the Patch's last statement: the edit that rewrites that
+     * statement to say both, or takes it out when the two cancel; undefined when
+     * the statement is one of its own.
+     */
+    function offered(patch, said, statement) {
+        const last = patch.child(patch.count() - 1);
+        if (last === undefined)
+            return undefined;
+        const folded = (0, index_js_36.foldStatement)(last, said, statement);
+        if (folded === undefined)
+            return undefined;
+        return folded === null
+            ? { site: { node: last, offset: undefined }, opcode: index_js_36.Opcode.Remove, arguments: [] }
+            : { site: { node: last, offset: undefined }, opcode: index_js_36.Opcode.Write, arguments: [folded] };
+    }
+    /**
+     * The edits of one keystroke as what they are, for folding: undefined unless
+     * they are all at one place. Whether an `append` is of characters or of an
+     * element is not in its spelling, and it is here: a Text has no elements.
+     */
+    function saidOf(edits, value) {
+        const [first] = edits;
+        if (first === undefined)
+            return undefined;
+        const { node, offset } = first.site;
+        if (edits.some((edit) => edit.site.node !== node || edit.site.offset !== offset))
+            return undefined;
+        const navigation = (0, index_js_36.pathWithin)(value, node);
+        const path = navigation === undefined ? undefined : (0, index_js_36.wayOf)(navigation);
+        if (path === undefined)
+            return undefined;
+        const text = node instanceof index_js_35.Text ? node.value : undefined;
+        const parent = node.encodingParent;
+        return {
+            path,
+            character: offset === undefined ? undefined : characterIndex(first.site),
+            calls: edits.map((edit) => (0, index_js_36.writeEditCall)(edit.opcode, ...edit.arguments)),
+            spelling: text !== undefined && (offset !== undefined || edits.every((edit) => edit.opcode === index_js_36.Opcode.Append)),
+            length: text === undefined ? 0 : (0, index_js_35.graphemeCount)(text),
+            last: path.length > 0 && parent !== undefined && parent.indexOf(node) === parent.count() - 1,
         };
     }
     /**
@@ -17808,13 +18175,13 @@ define("editor/record", ["require", "exports", "data/index", "patch/index"], fun
      * conversion itself lives in one place, `data/graphemes.ts`.
      */
     function characterIndex(site) {
-        const text = site.node instanceof index_js_34.Text ? site.node.value : undefined;
+        const text = site.node instanceof index_js_35.Text ? site.node.value : undefined;
         if (text === undefined)
             throw new Error('record: a character offset on a node with no characters');
-        return (0, index_js_34.graphemeIndex)(text, site.offset ?? 0);
+        return (0, index_js_35.graphemeIndex)(text, site.offset ?? 0);
     }
 });
-define("editor/sync", ["require", "exports", "data/index", "patch/index", "editor/record"], function (require, exports, index_js_36, index_js_37, record_js_1) {
+define("editor/sync", ["require", "exports", "data/index", "patch/index", "editor/record"], function (require, exports, index_js_37, index_js_38, record_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.armable = armable;
@@ -17861,8 +18228,8 @@ define("editor/sync", ["require", "exports", "data/index", "patch/index", "edito
         const outer = at < 0 ? readings : readings.slice(at + 1);
         const edit = {
             site: { node: reference, offset: undefined },
-            opcode: index_js_37.Opcode.Append,
-            arguments: [(0, index_js_37.writeOpcodeCall)(index_js_37.Opcode.Sync, new index_js_36.Text(index_js_37.SAVE_LABEL))],
+            opcode: index_js_38.Opcode.Append,
+            arguments: [(0, index_js_38.writeOpcodeCall)(index_js_38.Opcode.Sync, new index_js_37.Text(index_js_38.SAVE_LABEL))],
         };
         const edits = outer.length === 0 ? [edit] : (0, record_js_1.recordedInto)([edit], outer);
         if (edits === undefined)
@@ -17875,11 +18242,11 @@ define("editor/sync", ["require", "exports", "data/index", "patch/index", "edito
     }
     function endsInSync(patch) {
         const last = patch.child(patch.count() - 1);
-        const statement = last === undefined ? undefined : (0, index_js_37.readStatement)(last);
-        return statement?.kind === 'opcode' && statement.opcode === index_js_37.Opcode.Sync;
+        const statement = last === undefined ? undefined : (0, index_js_38.readStatement)(last);
+        return statement?.kind === 'opcode' && statement.opcode === index_js_38.Opcode.Sync;
     }
 });
-define("editor/focus", ["require", "exports", "data/index", "patch/index", "patch/instruction", "patch/opcode"], function (require, exports, index_js_38, index_js_39, instruction_js_11, opcode_js_12) {
+define("editor/focus", ["require", "exports", "data/index", "patch/index", "patch/instruction", "patch/opcode"], function (require, exports, index_js_39, index_js_40, instruction_js_12, opcode_js_13) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.focusPatch = focusPatch;
@@ -17910,23 +18277,23 @@ define("editor/focus", ["require", "exports", "data/index", "patch/index", "patc
         for (let at = top + 1; at < nodes.length; at++) {
             const parent = nodes[at - 1];
             const child = nodes[at];
-            if (!(parent instanceof index_js_38.List) || parent instanceof index_js_38.Metadata || child === undefined)
+            if (!(parent instanceof index_js_39.List) || parent instanceof index_js_39.Metadata || child === undefined)
                 return undefined;
             const index = parent.indexOf(child);
             if (index < 0)
                 return undefined;
-            steps.push((0, instruction_js_11.wholeNumber)(index));
+            steps.push((0, instruction_js_12.wholeNumber)(index));
         }
         const patch = reading.patch;
         const seatAt = path.lastIndexOf(patch);
         const holder = path[seatAt - 1];
-        if (!(holder instanceof index_js_38.List))
+        if (!(holder instanceof index_js_39.List))
             return undefined;
         const index = holder.indexOf(patch);
         if (index < 0)
             return undefined;
         return {
-            edits: [{ site: { node: patch, offset: undefined }, opcode: opcode_js_12.Opcode.Append, arguments: [(0, instruction_js_11.writeOpcodeCall)(opcode_js_12.Opcode.Child, ...steps)] }],
+            edits: [{ site: { node: patch, offset: undefined }, opcode: opcode_js_13.Opcode.Append, arguments: [(0, instruction_js_12.writeOpcodeCall)(opcode_js_13.Opcode.Child, ...steps)] }],
             revises: false,
             caret: { parent: holder, index, offset: undefined },
         };
@@ -17941,23 +18308,39 @@ define("editor/focus", ["require", "exports", "data/index", "patch/index", "patc
      */
     function reviewScope(selection, document) {
         const effect = selection.focusValue();
-        if (!(effect instanceof index_js_39.SideEffect))
+        if (!(effect instanceof index_js_40.SideEffect))
             return undefined;
-        const plan = (0, index_js_39.acceptance)(effect, document);
+        const plan = (0, index_js_40.acceptance)(effect, document);
         return typeof plan === 'string' ? undefined : plan.scope();
     }
 });
 define("editor/menu", ["require", "exports", "editor/converters", "editor/keymap", "editor/sync", "editor/typing", "editor/focus"], function (require, exports, converters_js_1, keymap_js_1, sync_js_1, typing_js_3, focus_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.MENU_REVIEW = exports.MENU_FOCUS = exports.MENU_BAKE = exports.MENU_CONVERT = exports.MENU_PROGRAM = exports.MENU_SAVE = exports.MENU_FOLLOW = exports.MENU_FACES = void 0;
+    exports.MENU_REVIEW = exports.MENU_FOCUS = exports.MENU_BAKE = exports.MENU_CONVERT = exports.MENU_PATCH_FACE = exports.MENU_SAVE = exports.MENU_FOLLOW = exports.MENU_FACES = void 0;
     exports.menuFor = menuFor;
     exports.shortcutFor = shortcutFor;
     /** Labels, in one place, because they are the interface. */
     exports.MENU_FACES = 'Faces';
     exports.MENU_FOLLOW = 'Follow reference to its source';
     exports.MENU_SAVE = 'Save';
-    exports.MENU_PROGRAM = 'Session program';
+    /**
+     * The root's extra face: the session Patch, drawn as its program.
+     *
+     * **The session Patch is the one Patch the cursor cannot stand on** - the
+     * cursor's root is what the session *evaluates to* - so the root stands in for
+     * it, the way ctrl+shift+E on any other Patch shows the program behind its
+     * value. Clicking the background puts the cursor on the root, and the root's
+     * Faces submenu offers this beside the document's own faces (Chris, 2026-11-24,
+     * replacing the background menu's separate "Session program" entry).
+     *
+     * It is a face in the menu and not in the `FaceRegistry`, which is the one
+     * thing worth arguing: the registry resolves a Patch's *default* by what
+     * applies, and a page with no evaluator would then open showing its own source.
+     * The session Patch's default drawing is the document, always, so the choice is
+     * held as view state by the editor and dies with it, as a face choice does (C4).
+     */
+    exports.MENU_PATCH_FACE = 'patch';
     exports.MENU_CONVERT = 'Convert';
     exports.MENU_BAKE = 'Bake';
     exports.MENU_FOCUS = 'Focus - navigate Patch to here';
@@ -17974,6 +18357,22 @@ define("editor/menu", ["require", "exports", "editor/converters", "editor/keymap
         const { selection, session, faces, target, background, showingProgram } = context;
         const candidates = faces.candidates(target);
         const inEffect = faces.resolve(target);
+        // On the root, the session Patch is one more way to draw it.
+        const root = target === session.document();
+        const faceItems = candidates.map((face) => ({
+            label: face.name,
+            enabled: true,
+            checked: !(root && showingProgram) && face === inEffect,
+            action: { kind: 'face', node: target, face: face.name },
+        }));
+        if (root) {
+            faceItems.push({
+                label: exports.MENU_PATCH_FACE,
+                enabled: true,
+                checked: showingProgram,
+                action: { kind: 'program' },
+            });
+        }
         // Never from the background, for Follow's reason: a conversion acts on the
         // selection, and the background menu is about the document.
         const converters = converters_js_1.CONVERTERS.map((converter) => ({
@@ -17985,13 +18384,8 @@ define("editor/menu", ["require", "exports", "editor/converters", "editor/keymap
                 label: exports.MENU_FACES,
                 // A submenu of one is not a choice, and drawing it as though it were
                 // would suggest the reader could be looking at something else.
-                enabled: candidates.length > 1,
-                items: candidates.map((face) => ({
-                    label: face.name,
-                    enabled: true,
-                    checked: face === inEffect,
-                    action: { kind: 'face', node: target, face: face.name },
-                })),
+                enabled: faceItems.length > 1,
+                items: faceItems,
             },
             {
                 label: exports.MENU_CONVERT,
@@ -18004,16 +18398,6 @@ define("editor/menu", ["require", "exports", "editor/converters", "editor/keymap
                     action: { kind: 'convert', converter: converter.name },
                 })),
             },
-            // On the background only, because it is the session Patch's entry and the
-            // background is the only place the session Patch can be pointed at. What it
-            // offers is what ctrl+shift+E offers for every other Patch on the page -
-            // the program behind the value - for the one Patch that key cannot reach.
-            ...(background ? [{
-                    label: exports.MENU_PROGRAM,
-                    enabled: true,
-                    checked: showingProgram,
-                    action: { kind: 'command', command: 'toggle-session-program' },
-                }] : []),
             {
                 label: exports.MENU_FOLLOW,
                 // Never from the background: it acts on the selection, and a menu about
@@ -18083,7 +18467,7 @@ define("editor/menu", ["require", "exports", "editor/converters", "editor/keymap
         return key.length === 1 ? key.toUpperCase() : key;
     }
 });
-define("editor/lines", ["require", "exports", "view/index", "data/graphemes", "editor/selection", "editor/typing"], function (require, exports, index_js_40, graphemes_js_4, selection_js_1, typing_js_4) {
+define("editor/lines", ["require", "exports", "view/index", "data/graphemes", "editor/selection", "editor/typing"], function (require, exports, index_js_41, graphemes_js_4, selection_js_1, typing_js_4) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.moveLine = moveLine;
@@ -18133,7 +18517,7 @@ define("editor/lines", ["require", "exports", "view/index", "data/graphemes", "e
      * what every other cursor move in this editor does at its ends.
      */
     function moveLine(selection, root, context, down, column) {
-        const trail = (0, index_js_40.boxesAlong)(root, selection.path());
+        const trail = (0, index_js_41.boxesAlong)(root, selection.path());
         const focus = trail?.[trail.length - 1];
         const { node, offset } = selection.position();
         // A path the drawing does not match - the program is drawn instead of the
@@ -18146,7 +18530,7 @@ define("editor/lines", ["require", "exports", "view/index", "data/graphemes", "e
             ? nearestOnNextLine(bottomStops(markupScope(trail), context), from, down, aim)
             : nearestAtDepth(trail, from, down, aim, context);
         if (landing !== undefined)
-            selection.placeAlong((0, index_js_40.pathOf)(landing.trail), landing.offset);
+            selection.placeAlong((0, index_js_41.pathOf)(landing.trail), landing.offset);
         return aim;
     }
     /**
@@ -18159,7 +18543,7 @@ define("editor/lines", ["require", "exports", "view/index", "data/graphemes", "e
      */
     function stopAt(trail, offset, context) {
         const box = trail[trail.length - 1];
-        const point = offset === undefined ? undefined : (0, index_js_40.caretPoint)(box, offset, context.metrics);
+        const point = offset === undefined ? undefined : (0, index_js_41.caretPoint)(box, offset, context.metrics);
         if (point !== undefined) {
             const { x, run } = point;
             return {
@@ -18297,7 +18681,7 @@ define("editor/lines", ["require", "exports", "view/index", "data/graphemes", "e
         return best;
     }
 });
-define("editor/moves", ["require", "exports", "data/index", "patch/executor", "patch/instruction", "patch/opcode", "view/index", "editor/lines"], function (require, exports, index_js_41, executor_js_10, instruction_js_12, opcode_js_13, index_js_42, lines_js_1) {
+define("editor/moves", ["require", "exports", "data/index", "patch/executor", "patch/instruction", "patch/opcode", "view/index", "editor/lines"], function (require, exports, index_js_42, executor_js_10, instruction_js_13, opcode_js_14, index_js_43, lines_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.moveAcross = moveAcross;
@@ -18325,8 +18709,8 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
      */
     /** A container a node may be moved into. */
     function enterable(node) {
-        return node instanceof index_js_41.List && !(node instanceof index_js_41.Patch) && !(node instanceof index_js_41.Metadata)
-            && (node.constructor === index_js_41.List || node instanceof index_js_41.Keyed);
+        return node instanceof index_js_42.List && !(node instanceof index_js_42.Patch) && !(node instanceof index_js_42.Metadata)
+            && (node.constructor === index_js_42.List || node instanceof index_js_42.Keyed);
     }
     /** Shift+alt+left/right. */
     function moveAcross(selection, by) {
@@ -18341,13 +18725,13 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
         if (node === undefined)
             return undefined;
         const copy = (0, executor_js_10.deepCopy)(node);
-        const removal = { site: { node, offset: undefined }, opcode: opcode_js_13.Opcode.Remove, arguments: [] };
+        const removal = { site: { node, offset: undefined }, opcode: opcode_js_14.Opcode.Remove, arguments: [] };
         const neighbour = parent.child(index + by);
         if (neighbour !== undefined) {
             if (!enterable(neighbour)) {
                 // Past a leaf: alt+arrow's move.
                 return {
-                    edits: [{ site: { node, offset: undefined }, opcode: opcode_js_13.Opcode.MoveBy, arguments: [(0, instruction_js_12.wholeNumber)(by)] }],
+                    edits: [{ site: { node, offset: undefined }, opcode: opcode_js_14.Opcode.MoveBy, arguments: [(0, instruction_js_13.wholeNumber)(by)] }],
                     revises: false,
                     caret: { parent, index: index + by, offset: undefined },
                 };
@@ -18356,8 +18740,8 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
             // copy goes in first and the node comes out after.
             const first = neighbour.child(0);
             const into = by === 1 && first !== undefined
-                ? { site: { node: first, offset: undefined }, opcode: opcode_js_13.Opcode.Insert, arguments: [copy] }
-                : { site: { node: neighbour, offset: undefined }, opcode: opcode_js_13.Opcode.Append, arguments: [copy] };
+                ? { site: { node: first, offset: undefined }, opcode: opcode_js_14.Opcode.Insert, arguments: [copy] }
+                : { site: { node: neighbour, offset: undefined }, opcode: opcode_js_14.Opcode.Append, arguments: [copy] };
             const seat = by === 1 ? index : index - 1;
             return {
                 edits: [into, removal],
@@ -18368,7 +18752,7 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
         // At the end of its own: out, to beside its container.
         const path = selection.path();
         const outer = path[path.length - 3];
-        if (!(outer instanceof index_js_41.List) || outer instanceof index_js_41.Metadata || parent instanceof index_js_41.Metadata)
+        if (!(outer instanceof index_js_42.List) || outer instanceof index_js_42.Metadata || parent instanceof index_js_42.Metadata)
             return undefined;
         const at = outer.indexOf(parent);
         if (at < 0)
@@ -18377,14 +18761,14 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
             // After the container: the insert shifts nothing before it, so it goes first.
             const following = outer.child(at + 1);
             const out = following === undefined
-                ? { site: { node: outer, offset: undefined }, opcode: opcode_js_13.Opcode.Append, arguments: [copy] }
-                : { site: { node: following, offset: undefined }, opcode: opcode_js_13.Opcode.Insert, arguments: [copy] };
+                ? { site: { node: outer, offset: undefined }, opcode: opcode_js_14.Opcode.Append, arguments: [copy] }
+                : { site: { node: following, offset: undefined }, opcode: opcode_js_14.Opcode.Insert, arguments: [copy] };
             return { edits: [out, removal], revises: false, caret: { parent: outer, index: at + 1, offset: undefined } };
         }
         // Before it: inserting there would shift the container the node is in, so
         // the node comes out first, and the container is still where it was.
         return {
-            edits: [removal, { site: { node: parent, offset: undefined }, opcode: opcode_js_13.Opcode.Insert, arguments: [copy] }],
+            edits: [removal, { site: { node: parent, offset: undefined }, opcode: opcode_js_14.Opcode.Insert, arguments: [copy] }],
             revises: false,
             caret: { parent: outer, index: at, offset: undefined },
         };
@@ -18402,7 +18786,7 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
         const own = offset === undefined ? before : before.slice(0, -1);
         const node = own[own.length - 1];
         const parent = own[own.length - 2];
-        if (node === undefined || !(parent instanceof index_js_41.List) || parent instanceof index_js_41.Metadata)
+        if (node === undefined || !(parent instanceof index_js_42.List) || parent instanceof index_js_42.Metadata)
             return undefined;
         const index = parent.indexOf(node);
         if (index < 0)
@@ -18418,7 +18802,7 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
         if (aim === undefined || landing === own || sameNodes(landing, own))
             return undefined;
         const half = (target, path) => {
-            const box = (0, index_js_42.boxesAlong)(glass.box, path)?.at(-1);
+            const box = (0, index_js_43.boxesAlong)(glass.box, path)?.at(-1);
             return box === undefined || box.node !== target ? down : aim >= box.x + box.width / 2;
         };
         if (!free) {
@@ -18437,7 +18821,7 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
             if (final === index)
                 return undefined;
             return {
-                edits: [{ site: { node, offset: undefined }, opcode: opcode_js_13.Opcode.MoveBy, arguments: [(0, instruction_js_12.wholeNumber)(final - index)] }],
+                edits: [{ site: { node, offset: undefined }, opcode: opcode_js_14.Opcode.MoveBy, arguments: [(0, instruction_js_13.wholeNumber)(final - index)] }],
                 revises: false,
                 caret: { parent, index: final, offset: undefined },
             };
@@ -18447,9 +18831,9 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
         const holder = landing[landing.length - 2];
         const anchor = target;
         // A landing inside a leaf's characters is at that leaf.
-        if (!(holder instanceof index_js_41.List))
+        if (!(holder instanceof index_js_42.List))
             return undefined;
-        if (holder instanceof index_js_41.Metadata || holder instanceof index_js_41.Patch)
+        if (holder instanceof index_js_42.Metadata || holder instanceof index_js_42.Patch)
             return undefined;
         if (landing.includes(node))
             return undefined;
@@ -18463,9 +18847,9 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
         const copy = (0, executor_js_10.deepCopy)(node);
         const following = holder.child(seat);
         const insert = following === undefined
-            ? { site: { node: holder, offset: undefined }, opcode: opcode_js_13.Opcode.Append, arguments: [copy] }
-            : { site: { node: following, offset: undefined }, opcode: opcode_js_13.Opcode.Insert, arguments: [copy] };
-        const removal = { site: { node, offset: undefined }, opcode: opcode_js_13.Opcode.Remove, arguments: [] };
+            ? { site: { node: holder, offset: undefined }, opcode: opcode_js_14.Opcode.Append, arguments: [copy] }
+            : { site: { node: following, offset: undefined }, opcode: opcode_js_14.Opcode.Insert, arguments: [copy] };
+        const removal = { site: { node, offset: undefined }, opcode: opcode_js_14.Opcode.Remove, arguments: [] };
         // Inserting into an ancestor of the node, at or before the branch it is on,
         // shifts the node's own path: then it comes out first. Otherwise the copy
         // goes in first, and the node's removal cannot move where the copy went.
@@ -18483,7 +18867,7 @@ define("editor/moves", ["require", "exports", "data/index", "patch/executor", "p
         return a.length === b.length && a.every((node, i) => node === b[i]);
     }
 });
-define("editor/columns", ["require", "exports", "data/index", "patch/instruction", "patch/opcode"], function (require, exports, index_js_43, instruction_js_13, opcode_js_14) {
+define("editor/columns", ["require", "exports", "data/index", "patch/instruction", "patch/opcode"], function (require, exports, index_js_44, instruction_js_14, opcode_js_15) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.acrossRows = acrossRows;
@@ -18563,7 +18947,7 @@ define("editor/columns", ["require", "exports", "data/index", "patch/instruction
             return [];
         // Appending into the row itself: a new last cell.
         if (node === row) {
-            if (intent.opcode !== opcode_js_14.Opcode.Append)
+            if (intent.opcode !== opcode_js_15.Opcode.Append)
                 return [];
             return seat(other, row.count(), intent.arguments.length);
         }
@@ -18573,22 +18957,22 @@ define("editor/columns", ["require", "exports", "data/index", "patch/instruction
         if (index < 0)
             return [];
         switch (intent.opcode) {
-            case opcode_js_14.Opcode.Insert:
+            case opcode_js_15.Opcode.Insert:
                 return seat(other, index, intent.arguments.length);
-            case opcode_js_14.Opcode.Remove: {
+            case opcode_js_15.Opcode.Remove: {
                 const first = other.child(index);
                 if (first === undefined)
                     return [];
                 const count = Math.min(countOf(intent.arguments[0]), other.count() - index);
-                return [{ site: { node: first, offset: undefined }, opcode: opcode_js_14.Opcode.Remove, arguments: count === 1 ? [] : [(0, instruction_js_13.wholeNumber)(count)] }];
+                return [{ site: { node: first, offset: undefined }, opcode: opcode_js_15.Opcode.Remove, arguments: count === 1 ? [] : [(0, instruction_js_14.wholeNumber)(count)] }];
             }
-            case opcode_js_14.Opcode.MoveBy: {
+            case opcode_js_15.Opcode.MoveBy: {
                 const mover = other.child(index);
                 const by = countOf(intent.arguments[0]);
                 const landing = index + by;
                 if (mover === undefined || landing < 0 || landing >= other.count())
                     return [];
-                return [{ site: { node: mover, offset: undefined }, opcode: opcode_js_14.Opcode.MoveBy, arguments: [(0, instruction_js_13.wholeNumber)(by)] }];
+                return [{ site: { node: mover, offset: undefined }, opcode: opcode_js_15.Opcode.MoveBy, arguments: [(0, instruction_js_14.wholeNumber)(by)] }];
             }
             default:
                 return [];
@@ -18602,21 +18986,21 @@ define("editor/columns", ["require", "exports", "data/index", "patch/instruction
     function seat(row, index, count) {
         if (count === 0)
             return [];
-        const blanks = Array.from({ length: count }, () => new index_js_43.List());
+        const blanks = Array.from({ length: count }, () => new index_js_44.List());
         const before = row.child(index);
         if (before === undefined) {
-            return [{ site: { node: row, offset: undefined }, opcode: opcode_js_14.Opcode.Append, arguments: blanks }];
+            return [{ site: { node: row, offset: undefined }, opcode: opcode_js_15.Opcode.Append, arguments: blanks }];
         }
-        return [{ site: { node: before, offset: undefined }, opcode: opcode_js_14.Opcode.Insert, arguments: blanks }];
+        return [{ site: { node: before, offset: undefined }, opcode: opcode_js_15.Opcode.Insert, arguments: blanks }];
     }
     /** A `remove` count or a `move by` distance, read back off the argument the recorder wrote. */
     function countOf(argument) {
         if (argument === undefined)
             return 1;
-        return argument instanceof index_js_43.Quantity ? Number(argument.asNumber()) : 1;
+        return argument instanceof index_js_44.Quantity ? Number(argument.asNumber()) : 1;
     }
 });
-define("editor/commands", ["require", "exports", "data/index", "patch/executor", "editor/lines", "editor/moves", "editor/focus", "editor/converters", "editor/selection", "editor/columns", "data/graphemes", "editor/sync", "editor/typing"], function (require, exports, index_js_44, executor_js_11, lines_js_2, moves_js_1, focus_js_2, converters_js_2, selection_js_2, columns_js_1, graphemes_js_5, sync_js_2, typing_js_5) {
+define("editor/commands", ["require", "exports", "data/index", "patch/executor", "editor/lines", "editor/moves", "editor/focus", "editor/converters", "editor/selection", "editor/columns", "data/graphemes", "editor/sync", "editor/typing"], function (require, exports, index_js_45, executor_js_11, lines_js_2, moves_js_1, focus_js_2, converters_js_2, selection_js_2, columns_js_1, graphemes_js_5, sync_js_2, typing_js_5) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.pastePlain = exports.typeText = exports.RECORDING = exports.NON_RECORDING = exports.DEFERRED = void 0;
@@ -18705,7 +19089,7 @@ define("editor/commands", ["require", "exports", "data/index", "patch/executor",
             // Chris 2026-10-30): as if the value were encoded there. Its own markup is
             // reached under the program face, where it is drawn as a program.
             const focus = selection.focus();
-            if (focus instanceof index_js_44.Patch && selection.drawnAsValue())
+            if (focus instanceof index_js_45.Patch && selection.drawnAsValue())
                 selection.placeInReading(focus);
             selection.moveToMetadata();
             return undefined;
@@ -18745,32 +19129,6 @@ define("editor/commands", ["require", "exports", "data/index", "patch/executor",
             faces.toggle(selection.focus(), 'result');
             return undefined;
         },
-        /**
-         * Show the session program instead of the document, and show the document
-         * again.
-         *
-         * **The session Patch is the one node the cursor cannot reach**, and that is
-         * not an oversight: the cursor's root is what the session *evaluates to*, so
-         * the program is nowhere in the tree it walks. Every other Patch on the page
-         * has ctrl+shift+E for this - show the program behind the value - and this is
-         * that key's meaning for the one Patch it cannot be pointed at. The gesture
-         * is a right-click on the background, because the background is where the
-         * session Patch is.
-         *
-         * **It is deliberately not a face choice in the registry**, which is the one
-         * decision here. It looks like one and behaves like one, but `FaceRegistry`
-         * resolves a Patch's *default* by what applies - and a page drawn without an
-         * evaluator has no `ResultFace`, so the default for a Patch there is the
-         * program. Routing this through `resolve` would make a page with no evaluator
-         * open showing its own source. The rule the registry cannot express is that
-         * **the session Patch's default drawing is the document, always**, so the
-         * choice is held as what it is: one boolean, view state, dying with the
-         * editor exactly as a face choice dies with its node.
-         *
-         * Records nothing, and is in `NON_RECORDING` with the other two: looking at
-         * a program is not editing one (C4).
-         */
-        'toggle-session-program': ({ view }) => { view.program = !view.program; return undefined; },
         /**
          * Go to the fact a reading reads (Stage 2d, slice 4).
          *
@@ -18820,7 +19178,7 @@ define("editor/commands", ["require", "exports", "data/index", "patch/executor",
         bake: ({ selection }) => (0, typing_js_5.bake)(selection),
         'layout-vertical': ({ selection, faces }) => {
             const focus = selection.focus();
-            if (focus instanceof index_js_44.List)
+            if (focus instanceof index_js_45.List)
                 faces.toggle(focus, 'list-stacked');
             return undefined;
         },
@@ -18940,7 +19298,7 @@ define("editor/commands", ["require", "exports", "data/index", "patch/executor",
         'select-metadata',
         'extend-selection-previous', 'extend-selection-next', 'select-all-siblings',
         'cycle-face', 'cycle-face-back', 'layout-vertical',
-        'unevaluate-patch', 'reevaluate-patch', 'follow-reference', 'toggle-session-program',
+        'unevaluate-patch', 'reevaluate-patch', 'follow-reference',
         'copy',
         'collapse', 'expand', 'review-scope',
         'undo', 'redo', 'save-document',
@@ -19098,7 +19456,7 @@ define("editor/commands", ["require", "exports", "data/index", "patch/executor",
             return false;
         for (;;) {
             const focus = selection.focus();
-            if (!(focus instanceof index_js_44.List) || focus instanceof index_js_44.Patch || focus.count() === 0)
+            if (!(focus instanceof index_js_45.List) || focus instanceof index_js_45.Patch || focus.count() === 0)
                 break;
             if (!selection.moveIn(forward ? 0 : focus.count() - 1))
                 break;
@@ -19150,7 +19508,7 @@ define("editor/commands", ["require", "exports", "data/index", "patch/executor",
         while (selection.moveOut()) { /* to the root */ }
         for (;;) {
             const focus = selection.focus();
-            if (!(focus instanceof index_js_44.List) || focus.count() === 0)
+            if (!(focus instanceof index_js_45.List) || focus.count() === 0)
                 break;
             if (!selection.moveIn(last ? focus.count() - 1 : 0))
                 break;
@@ -19346,7 +19704,7 @@ define("editor/commands", ["require", "exports", "data/index", "patch/executor",
     const COLLAPSED_FACES = new Set(['summary', 'id']);
     /** True when this container is drawn collapsed - as its summary, or as its name. */
     function isCollapsed(node, faces) {
-        return node instanceof index_js_44.List && COLLAPSED_FACES.has(faces.resolve(node).name);
+        return node instanceof index_js_45.List && COLLAPSED_FACES.has(faces.resolve(node).name);
     }
     /** The face a container collapses to: its name where it has one, else its summary. */
     function collapsedFace(node, faces) {
@@ -19359,13 +19717,13 @@ define("editor/commands", ["require", "exports", "data/index", "patch/executor",
         const whole = selection.position().offset === undefined;
         for (let at = path.length - (whole ? 1 : 2); at >= 1; at--) {
             const node = path[at];
-            if (node instanceof index_js_44.List && !(node instanceof index_js_44.Patch) && !(node instanceof index_js_44.Metadata))
+            if (node instanceof index_js_45.List && !(node instanceof index_js_45.Patch) && !(node instanceof index_js_45.Metadata))
                 return node;
         }
         return undefined;
     }
 });
-define("editor/find", ["require", "exports", "data/index", "editor/typing"], function (require, exports, index_js_45, typing_js_6) {
+define("editor/find", ["require", "exports", "data/index", "editor/typing"], function (require, exports, index_js_46, typing_js_6) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DEFAULT_SCOPE = void 0;
@@ -19396,17 +19754,17 @@ define("editor/find", ["require", "exports", "data/index", "editor/typing"], fun
                         matches.push({ node, parent, index, from: at, to: at + wanted.length, programs, order: ordinal });
                     }
                 }
-                else if (node instanceof index_js_45.Bytes && hexQuery !== undefined && bytesMatch(node.value, hexQuery)) {
+                else if (node instanceof index_js_46.Bytes && hexQuery !== undefined && bytesMatch(node.value, hexQuery)) {
                     matches.push({ node, parent, index, from: undefined, to: undefined, programs, order: ordinal });
                 }
             }
             if (scope.metadata && node.metadata !== undefined)
                 visitChildren(node.metadata, programs);
-            if (!(node instanceof index_js_45.List))
+            if (!(node instanceof index_js_46.List))
                 return;
             if (!scope.collapsed && parent !== undefined && collapsed?.(node) === true)
                 return;
-            if (node instanceof index_js_45.Patch && parent !== undefined) {
+            if (node instanceof index_js_46.Patch && parent !== undefined) {
                 if (scope.programs)
                     visitChildren(node, [...programs, node]);
                 return;
@@ -19424,7 +19782,7 @@ define("editor/find", ["require", "exports", "data/index", "editor/typing"], fun
         const text = (0, typing_js_6.characterText)(match.node);
         if (text === undefined || match.from === undefined || match.to === undefined)
             return 0;
-        return (0, index_js_45.graphemeCount)(text.slice(match.from, match.to));
+        return (0, index_js_46.graphemeCount)(text.slice(match.from, match.to));
     }
     /** The query as hex digits with spaces dropped, or undefined when it is not one. */
     function hexDigits(query) {
@@ -19473,7 +19831,7 @@ define("editor/log", ["require", "exports"], function (require, exports) {
         return () => { listeners.delete(listener); };
     }
 });
-define("editor/examples", ["require", "exports", "data/index", "data/journal", "patch/index"], function (require, exports, index_js_46, journal_js_6, index_js_47) {
+define("editor/examples", ["require", "exports", "data/index", "data/journal", "patch/index"], function (require, exports, index_js_47, journal_js_6, index_js_48) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.hasExamples = hasExamples;
@@ -19488,16 +19846,16 @@ define("editor/examples", ["require", "exports", "data/index", "data/journal", "
         let generalization;
         let start = statements.length;
         for (const [index, node] of statements.entries()) {
-            const statement = (0, index_js_47.readStatement)(node);
+            const statement = (0, index_js_48.readStatement)(node);
             if (statement?.kind !== 'opcode')
                 continue;
-            if (statement.opcode === index_js_47.Opcode.Match) {
+            if (statement.opcode === index_js_48.Opcode.Match) {
                 const [input, output] = statement.arguments;
                 if (input !== undefined && output !== undefined)
                     cases.push({ node, input, output });
                 start = Math.min(start, index);
             }
-            else if (statement.opcode === index_js_47.Opcode.Generalization) {
+            else if (statement.opcode === index_js_48.Opcode.Generalization) {
                 generalization = node;
                 start = Math.min(start, index);
             }
@@ -19524,29 +19882,29 @@ define("editor/examples", ["require", "exports", "data/index", "data/journal", "
      * against the Patch as it stood before any of them, and a write leaves every
      * index where it was.
      */
-    function exampleEdits(patch, input, output, services = (0, index_js_47.standardServices)()) {
+    function exampleEdits(patch, input, output, services = (0, index_js_48.standardServices)()) {
         const examples = examplesOf(patch);
-        const statement = (0, index_js_47.writeOpcodeCall)(index_js_47.Opcode.Match, detached(input), detached(output));
-        const same = examples.cases.find((each) => (0, index_js_47.matches)(each.input, input) && (0, index_js_47.matches)(input, each.input));
+        const statement = (0, index_js_48.writeOpcodeCall)(index_js_48.Opcode.Match, detached(input), detached(output));
+        const same = examples.cases.find((each) => (0, index_js_48.matches)(each.input, input) && (0, index_js_48.matches)(input, each.input));
         const cases = same === undefined
             ? [...examples.cases, { input, output }]
             : examples.cases.map((each) => (each === same ? { input, output } : each));
         const found = generalizationOf(survivors(cases, services));
         const edits = [];
         if (examples.generalization !== undefined) {
-            edits.push({ site: { node: examples.generalization, offset: undefined }, opcode: index_js_47.Opcode.Write, arguments: [found] });
+            edits.push({ site: { node: examples.generalization, offset: undefined }, opcode: index_js_48.Opcode.Write, arguments: [found] });
         }
         if (same !== undefined) {
-            edits.push({ site: { node: same.node, offset: undefined }, opcode: index_js_47.Opcode.Write, arguments: [statement] });
+            edits.push({ site: { node: same.node, offset: undefined }, opcode: index_js_48.Opcode.Write, arguments: [statement] });
         }
         else if (examples.generalization !== undefined) {
-            edits.push({ site: { node: examples.generalization, offset: undefined }, opcode: index_js_47.Opcode.Insert, arguments: [statement] });
+            edits.push({ site: { node: examples.generalization, offset: undefined }, opcode: index_js_48.Opcode.Insert, arguments: [statement] });
         }
         else {
-            edits.push({ site: { node: patch, offset: undefined }, opcode: index_js_47.Opcode.Append, arguments: [statement] });
+            edits.push({ site: { node: patch, offset: undefined }, opcode: index_js_48.Opcode.Append, arguments: [statement] });
         }
         if (examples.generalization === undefined) {
-            edits.push({ site: { node: patch, offset: undefined }, opcode: index_js_47.Opcode.Append, arguments: [found] });
+            edits.push({ site: { node: patch, offset: undefined }, opcode: index_js_48.Opcode.Append, arguments: [found] });
         }
         return edits;
     }
@@ -19559,16 +19917,16 @@ define("editor/examples", ["require", "exports", "data/index", "data/journal", "
      * and its answer compared as `case` compares (`matches`), so a survivor is a
      * function that would reproduce each example if the example were not there.
      */
-    function survivors(cases, services = (0, index_js_47.standardServices)()) {
+    function survivors(cases, services = (0, index_js_48.standardServices)()) {
         if (cases.length === 0)
             return [];
         const names = [];
         for (const service of services) {
-            if (!(service.name instanceof index_js_46.Text))
+            if (!(service.name instanceof index_js_47.Text))
                 continue;
             const fits = cases.every(({ input, output }) => {
-                const answer = journal_js_6.Journal.run(undefined, () => service.invoke((0, index_js_47.operandsOf)(input)));
-                return !(answer instanceof index_js_46.Symbol && answer.value === index_js_46.SymbolValue.Problem) && (0, index_js_47.matches)(output, answer);
+                const answer = journal_js_6.Journal.run(undefined, () => service.invoke((0, index_js_48.operandsOf)(input)));
+                return !(answer instanceof index_js_47.Symbol && answer.value === index_js_47.SymbolValue.Problem) && (0, index_js_48.matches)(output, answer);
             });
             if (fits)
                 names.push(service.name.value);
@@ -19579,12 +19937,12 @@ define("editor/examples", ["require", "exports", "data/index", "data/journal", "
     function generalizationOf(names) {
         const [only] = names;
         if (names.length === 0 || only === undefined)
-            return (0, index_js_47.writeOpcodeCall)(index_js_47.Opcode.Generalization);
+            return (0, index_js_48.writeOpcodeCall)(index_js_48.Opcode.Generalization);
         if (names.length === 1)
-            return (0, index_js_47.writeOpcodeCall)(index_js_47.Opcode.Generalization, new index_js_46.Text(only));
-        return (0, index_js_47.writeOpcodeCall)(index_js_47.Opcode.Generalization, new index_js_46.Patch([
-            (0, index_js_47.writeOpcodeCall)(index_js_47.Opcode.Value, new index_js_46.List(names.map((name) => new index_js_46.Text(name)))),
-            (0, index_js_47.writeOpcodeCall)(index_js_47.Opcode.Choose),
+            return (0, index_js_48.writeOpcodeCall)(index_js_48.Opcode.Generalization, new index_js_47.Text(only));
+        return (0, index_js_48.writeOpcodeCall)(index_js_48.Opcode.Generalization, new index_js_47.Patch([
+            (0, index_js_48.writeOpcodeCall)(index_js_48.Opcode.Value, new index_js_47.List(names.map((name) => new index_js_47.Text(name)))),
+            (0, index_js_48.writeOpcodeCall)(index_js_48.Opcode.Choose),
         ]));
     }
     /**
@@ -19598,22 +19956,22 @@ define("editor/examples", ["require", "exports", "data/index", "data/journal", "
      */
     function edited(value, edits) {
         return journal_js_6.Journal.run(undefined, () => {
-            const holder = new index_js_46.List([(0, index_js_47.deepCopy)(value)]);
+            const holder = new index_js_47.List([(0, index_js_48.deepCopy)(value)]);
             for (const edit of edits) {
-                const hops = (0, index_js_47.hopsWithin)(value, edit.site.node);
+                const hops = (0, index_js_48.hopsWithin)(value, edit.site.node);
                 if (hops === undefined)
                     return undefined;
-                const text = edit.site.node instanceof index_js_46.Text ? edit.site.node.value : undefined;
+                const text = edit.site.node instanceof index_js_47.Text ? edit.site.node.value : undefined;
                 const path = edit.site.offset === undefined || text === undefined
                     ? hops
-                    : [...hops, (0, index_js_46.graphemeIndex)(text, edit.site.offset)];
+                    : [...hops, (0, index_js_47.graphemeIndex)(text, edit.site.offset)];
                 const program = path.length === 0
-                    ? [(0, index_js_47.writeEditCall)(edit.opcode, ...edit.arguments)]
-                    : [(0, index_js_47.writeOpcodeCall)(index_js_47.Opcode.Child, ...path.map((hop) => (0, index_js_47.wholeNumber)(hop))), (0, index_js_47.writeEditCall)(edit.opcode, ...edit.arguments)];
+                    ? [(0, index_js_48.writeEditCall)(edit.opcode, ...edit.arguments)]
+                    : [(0, index_js_48.writeOpcodeCall)(index_js_48.Opcode.Child, ...path.map((hop) => (0, index_js_48.wholeNumber)(hop))), (0, index_js_48.writeEditCall)(edit.opcode, ...edit.arguments)];
                 const root = holder.child(0);
                 if (root === undefined)
                     return undefined;
-                const outcome = new index_js_47.ReplayExecutor(new index_js_46.List()).executeStatements(program.map((each) => (0, index_js_47.deepCopy)(each)), root);
+                const outcome = new index_js_48.ReplayExecutor(new index_js_47.List()).executeStatements(program.map((each) => (0, index_js_48.deepCopy)(each)), root);
                 if (outcome.problem !== undefined)
                     return undefined;
             }
@@ -19622,10 +19980,10 @@ define("editor/examples", ["require", "exports", "data/index", "data/journal", "
     }
     /** A copy that shares nothing with the tree it came from, and is recorded as no edit. */
     function detached(node) {
-        return journal_js_6.Journal.run(undefined, () => (0, index_js_47.deepCopy)(node));
+        return journal_js_6.Journal.run(undefined, () => (0, index_js_48.deepCopy)(node));
     }
 });
-define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "editor/typing", "data/index", "patch/index", "editor/commands", "editor/find", "editor/log", "editor/converters", "editor/history", "editor/record", "editor/examples", "editor/keymap", "editor/menu"], function (require, exports, index_js_48, graphemes_js_6, typing_js_7, index_js_49, index_js_50, commands_js_1, find_js_1, log_js_1, converters_js_3, history_js_1, record_js_2, examples_js_3, keymap_js_2, menu_js_1) {
+define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "editor/typing", "data/index", "patch/index", "editor/commands", "editor/find", "editor/log", "editor/converters", "editor/history", "editor/record", "editor/examples", "editor/keymap", "editor/menu"], function (require, exports, index_js_49, graphemes_js_6, typing_js_7, index_js_50, index_js_51, commands_js_1, find_js_1, log_js_1, converters_js_3, history_js_1, record_js_2, examples_js_3, keymap_js_2, menu_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FOLD_CLIPBOARD_TYPE = exports.Editor = void 0;
@@ -19689,7 +20047,7 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
          *
          * View state, dying with the editor exactly as a face choice dies with its
          * node (C4) - and held here rather than in the `FaceRegistry` for a reason
-         * `commands.ts` argues at `toggle-session-program`: the registry resolves a
+         * `menu.ts` argues at `MENU_PATCH_FACE`: the registry resolves a
          * Patch's default by what applies, and a drawing with no evaluator has no
          * `ResultFace`, so a page without one would open showing its own source.
          */
@@ -20017,14 +20375,14 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
             const half = this.aside === undefined
                 ? base.availableWidth
                 : Math.max(base.margin, (base.availableWidth - gap) / 2);
-            const context = (0, index_js_48.derive)(base, { focusPath, availableWidth: half });
-            const box = (0, index_js_48.layout)(document, context);
+            const context = (0, index_js_49.derive)(base, { focusPath, availableWidth: half });
+            const box = (0, index_js_49.layout)(document, context);
             if (this.sealing && !this.view.program)
                 unsealedOnly(box, this.unsealed);
             const boxes = [box];
             if (this.aside !== undefined) {
                 // The same document, the same width, the same call - one field different.
-                boxes.push((0, index_js_48.layout)(document, (0, index_js_48.derive)(context, { faces: this.aside }), half + gap, 0));
+                boxes.push((0, index_js_49.layout)(document, (0, index_js_49.derive)(context, { faces: this.aside }), half + gap, 0));
             }
             // Drawn as values, because they are ones, and drawn *near* rather than in a
             // panel. A Problem is a Symbol carrying its cause in metadata and a pending
@@ -20039,16 +20397,16 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
                 if (value === undefined)
                     continue;
                 const below = boxes.reduce((low, drawn) => Math.max(low, drawn.y + drawn.height), 0);
-                const drawn = (0, index_js_48.layout)(value, (0, index_js_48.derive)(context, { focusPath: [value] }), 0, below + gap);
+                const drawn = (0, index_js_49.layout)(value, (0, index_js_49.derive)(context, { focusPath: [value] }), 0, below + gap);
                 boxes.push(drawn);
-                if (value instanceof index_js_50.SideEffect)
+                if (value instanceof index_js_51.SideEffect)
                     this.button = drawn;
             }
             this.drawn = box;
             this.drawnWith = context;
             this.renderer.render(boxes);
             this.renderer.selection(this.highlights(box, context));
-            this.renderer.cursor((0, index_js_48.caretIn)(box, this.selection.position(), context));
+            this.renderer.cursor((0, index_js_49.caretIn)(box, this.selection.position(), context));
             this.onDrawn?.();
         }
         /**
@@ -20069,12 +20427,12 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
             const range = this.selection.characterRange();
             if (range !== undefined) {
                 const node = this.selection.focus();
-                return (0, index_js_48.selectionIn)(box, { kind: 'characters', node, ...range }, context);
+                return (0, index_js_49.selectionIn)(box, { kind: 'characters', node, ...range }, context);
             }
             const nodes = this.selection.selected();
             if (nodes.length < 2)
                 return [];
-            return (0, index_js_48.selectionIn)(box, { kind: 'nodes', nodes }, context);
+            return (0, index_js_49.selectionIn)(box, { kind: 'nodes', nodes }, context);
         }
         /**
          * Where a click puts the cursor, in the document's own coordinates.
@@ -20102,7 +20460,7 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
             // a caret at the end of a line must never reach across a gap and press
             // something: a mutation is applied because it was aimed at.
             const button = this.button;
-            if (button !== undefined && encloses(button, x, y) && button.node instanceof index_js_50.SideEffect) {
+            if (button !== undefined && encloses(button, x, y) && button.node instanceof index_js_51.SideEffect) {
                 // Accepting an effect is the moment mutation is allowed to happen - by
                 // section 4.6, and, as it turns out, by the browser, which will not open
                 // a file picker outside a gesture. The redraw is the answer: the button
@@ -20114,13 +20472,13 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
             const root = this.drawn;
             if (root === undefined)
                 return;
-            const trail = (0, index_js_48.hitPath)(root, x, y);
+            const trail = (0, index_js_49.hitPath)(root, x, y);
             const box = trail[trail.length - 1];
             if (box === undefined)
                 return;
             // A button in the document - a Patch at a `sync` point, drawn as what it
             // evaluates to - on the same exact-hit rule as the save button above.
-            if (box.node instanceof index_js_50.SideEffect && encloses(box, x, y)) {
+            if (box.node instanceof index_js_51.SideEffect && encloses(box, x, y)) {
                 this.accept(box.node);
                 return;
             }
@@ -20153,7 +20511,7 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
             const root = this.drawn;
             if (root === undefined)
                 return false;
-            const trail = (0, index_js_48.hitPath)(root, x, y);
+            const trail = (0, index_js_49.hitPath)(root, x, y);
             const box = trail[trail.length - 1];
             if (box === undefined)
                 return false;
@@ -20165,7 +20523,7 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
                 return false;
             // Along the trail rather than at the seat: the descent knows which of the
             // node's drawings was aimed at, and a seat cannot say - see `placeAlong`.
-            const path = (0, index_js_48.pathOf)(trail);
+            const path = (0, index_js_49.pathOf)(trail);
             const sealed = click ? this.throughSeals(path) : undefined;
             if (sealed !== undefined)
                 this.selection.placeAlong(sealed);
@@ -20194,10 +20552,9 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
         /**
          * What the context menu offers, as a value. See `editor/menu.ts`.
          *
-         * With a point, the menu is about what is under it: a node when the point is
-         * on the drawing, and the **session Patch** when it is not - because the
-         * background is the only place the session Patch can be pointed at, the
-         * cursor's root being what the session evaluates to rather than the session.
+         * With a point, the menu is about what is under it: the selection when the
+         * point is on the drawing, and the **document root** when it is not - whose
+         * Faces include the session Patch, the one Patch the cursor cannot reach.
          * Without a point it is about the selection, which is what a test asks for
          * and what a keyboard would ask for if this were ever bound to one.
          */
@@ -20209,10 +20566,11 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
                 selection: this.selection,
                 session: this.session,
                 faces: this.context().faces,
-                // On the background the Faces submenu is about the *drawn root*, which is
-                // how "change the face used for the whole document" is spelled - and
-                // which is about the program instead once the program is what is drawn.
-                target: background ? this.drawnRoot() : this.selection.focus(),
+                // On the background the Faces submenu is about the document root, which
+                // is how "change the face used for the whole document" is spelled - and
+                // the root's faces include the session Patch, so the program is chosen
+                // there too, and left by choosing any other.
+                target: background ? this.session.document() : this.selection.focus(),
                 background,
                 showingProgram: this.view.program,
             });
@@ -20241,7 +20599,31 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
                     this.run((0, commands_js_1.convertWith)(converter), '');
                 return;
             }
-            this.context().faces.choose(action.node, action.face);
+            // The root's faces and its `patch` face are one choice: picking either kind
+            // replaces the other. Neither records anything (C4).
+            if (action.kind === 'program') {
+                this.view.program = true;
+            }
+            else {
+                if (action.node === this.session.document())
+                    this.view.program = false;
+                this.context().faces.choose(action.node, action.face);
+            }
+            this.column = undefined;
+            this.redraw();
+        }
+        /**
+         * A click on the page around the document: the cursor goes to the root.
+         *
+         * The background is the document seen whole, so a press there selects the
+         * whole of it - and the root's Faces are where the session Patch is offered,
+         * which is how the program is reached now that the background menu no longer
+         * carries an entry of its own for it.
+         */
+        handleBackgroundClick() {
+            this.selection.placeAlong(this.selection.path().slice(0, 1));
+            this.openAround();
+            this.open = undefined;
             this.column = undefined;
             this.redraw();
         }
@@ -20274,7 +20656,6 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
                 text,
                 history: this.history,
                 clipboard: this.clipboard,
-                view: this.view,
                 // The program view draws a tree the cursor is not in, so it has no lines
                 // for the cursor to move between.
                 glass: drawn === undefined || drawnWith === undefined || this.view.program
@@ -20332,8 +20713,8 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
             let output;
             let answer;
             let outer = readings;
-            if (edit.edits.length === 1 && first !== undefined && first.opcode === index_js_50.Opcode.Write
-                && first.site.offset === undefined && first.site.node instanceof index_js_49.Patch
+            if (edit.edits.length === 1 && first !== undefined && first.opcode === index_js_51.Opcode.Write
+                && first.site.offset === undefined && first.site.node instanceof index_js_50.Patch
                 && first.site.node === this.selection.reference() && this.selection.standingIn() === undefined) {
                 patch = first.site.node;
                 output = first.arguments[0];
@@ -20359,7 +20740,7 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
             // The caret goes where it was typed, in the answer the reading now draws: the
             // same seat inside it when the keystroke was inside it, or its root.
             const { caret } = edit;
-            const inside = answer === undefined ? undefined : (0, index_js_50.hopsWithin)(answer, caret.parent);
+            const inside = answer === undefined ? undefined : (0, index_js_51.hopsWithin)(answer, caret.parent);
             if (inside !== undefined && this.selection.placeInReading(patch)) {
                 for (const step of [...inside, caret.index, ...(caret.within ?? [])])
                     this.selection.moveIn(step);
@@ -20408,7 +20789,7 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
             // after the first would edit the source the reading was made from.
             const inner = readings[0];
             const inside = through === undefined && inner !== undefined
-                ? (0, index_js_50.hopsWithin)(inner.value, caret.parent)
+                ? (0, index_js_51.hopsWithin)(inner.value, caret.parent)
                 : undefined;
             const first = edits[0];
             const revises = edit.revises
@@ -20488,11 +20869,11 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
         // string broken across lines has a boundary at every x on every line, and
         // the click meant the one on the line it was on.
         for (const boundary of (0, graphemes_js_6.graphemeBoundaries)(text)) {
-            const point = (0, index_js_48.caretPoint)(box, boundary, context.metrics);
+            const point = (0, index_js_49.caretPoint)(box, boundary, context.metrics);
             if (point === undefined)
                 continue;
             const { run } = point;
-            const distance = (0, index_js_48.pointToRect)({ x: point.x, y: run.y, width: 0, height: run.height }, x, y);
+            const distance = (0, index_js_49.pointToRect)({ x: point.x, y: run.y, width: 0, height: run.height }, x, y);
             if (distance < least) {
                 least = distance;
                 best = boundary;
@@ -20544,7 +20925,7 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
     }
     /** A container sealing applies to: a List below the root, not a Patch or a metadata band. */
     function sealable(node) {
-        return node instanceof index_js_49.List && !(node instanceof index_js_49.Patch) && !(node instanceof index_js_49.Metadata);
+        return node instanceof index_js_50.List && !(node instanceof index_js_50.Patch) && !(node instanceof index_js_50.Metadata);
     }
     /**
      * Drop the outline and overline of every sealed container from a laid-out
@@ -20561,7 +20942,7 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
     /** Page up's half: the node walked out to, and everything in it, sealed again. */
     function sealUnder(node, unsealed) {
         unsealed.delete(node);
-        if (node instanceof index_js_49.List)
+        if (node instanceof index_js_50.List)
             for (const child of node.children())
                 sealUnder(child, unsealed);
     }
@@ -20569,7 +20950,7 @@ define("editor/editor", ["require", "exports", "view/index", "data/graphemes", "
 define("editor/index", ["require", "exports", "editor/keymap", "editor/menu", "editor/converters", "editor/selection", "editor/typing", "editor/commands", "editor/history", "editor/record", "editor/editor", "editor/find", "editor/log"], function (require, exports, keymap_js_3, menu_js_2, converters_js_4, selection_js_3, typing_js_8, commands_js_2, history_js_2, record_js_3, editor_js_1, find_js_2, log_js_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.onLog = exports.logEntries = exports.log = exports.clearLog = exports.matchLength = exports.search = exports.findAll = exports.DEFAULT_SCOPE = exports.FOLD_CLIPBOARD_TYPE = exports.clipboardKey = exports.Editor = exports.recordedInto = exports.intoReading = exports.History = exports.DEFERRED = exports.RECORDING = exports.NON_RECORDING = exports.convertWith = exports.pastePlain = exports.typeText = exports.commandFor = exports.selectionText = exports.cycleKind = exports.cut = exports.insertValues = exports.insertValue = exports.pasteText = exports.pullBack = exports.wrapInList = exports.moveElement = exports.deleteText = exports.insertText = exports.shortestRepresentation = exports.promote = exports.literalSpace = exports.tokenizeOnSpace = exports.tokenValue = exports.characterText = exports.caretBeyond = exports.atBottom = exports.Selection = exports.convertSelection = exports.converterNamed = exports.TEXT_CONVERTER = exports.DEDUPLICATE_CONVERTER = exports.SPLIT_CONVERTER = exports.HEX_CONVERTER = exports.BASE64_CONVERTER = exports.JSON_CONVERTER = exports.URL_CONVERTER = exports.CONVERTERS = exports.MENU_CONVERT = exports.MENU_PROGRAM = exports.MENU_SAVE = exports.MENU_FOLLOW = exports.MENU_FACES = exports.shortcutFor = exports.menuFor = exports.MENU_COMMANDS = exports.KEYMAP = void 0;
+    exports.onLog = exports.logEntries = exports.log = exports.clearLog = exports.matchLength = exports.search = exports.findAll = exports.DEFAULT_SCOPE = exports.FOLD_CLIPBOARD_TYPE = exports.clipboardKey = exports.Editor = exports.recordedInto = exports.intoReading = exports.History = exports.DEFERRED = exports.RECORDING = exports.NON_RECORDING = exports.convertWith = exports.pastePlain = exports.typeText = exports.commandFor = exports.selectionText = exports.cycleKind = exports.cut = exports.insertValues = exports.insertValue = exports.pasteText = exports.pullBack = exports.wrapInList = exports.moveElement = exports.deleteText = exports.insertText = exports.shortestRepresentation = exports.promote = exports.literalSpace = exports.tokenizeOnSpace = exports.tokenValue = exports.characterText = exports.caretBeyond = exports.atBottom = exports.Selection = exports.convertSelection = exports.converterNamed = exports.TEXT_CONVERTER = exports.DEDUPLICATE_CONVERTER = exports.SPLIT_CONVERTER = exports.HEX_CONVERTER = exports.BASE64_CONVERTER = exports.JSON_CONVERTER = exports.URL_CONVERTER = exports.CONVERTERS = exports.MENU_CONVERT = exports.MENU_PATCH_FACE = exports.MENU_SAVE = exports.MENU_FOLLOW = exports.MENU_FACES = exports.shortcutFor = exports.menuFor = exports.MENU_COMMANDS = exports.KEYMAP = void 0;
     Object.defineProperty(exports, "KEYMAP", { enumerable: true, get: function () { return keymap_js_3.KEYMAP; } });
     Object.defineProperty(exports, "MENU_COMMANDS", { enumerable: true, get: function () { return keymap_js_3.MENU_COMMANDS; } });
     Object.defineProperty(exports, "menuFor", { enumerable: true, get: function () { return menu_js_2.menuFor; } });
@@ -20577,7 +20958,7 @@ define("editor/index", ["require", "exports", "editor/keymap", "editor/menu", "e
     Object.defineProperty(exports, "MENU_FACES", { enumerable: true, get: function () { return menu_js_2.MENU_FACES; } });
     Object.defineProperty(exports, "MENU_FOLLOW", { enumerable: true, get: function () { return menu_js_2.MENU_FOLLOW; } });
     Object.defineProperty(exports, "MENU_SAVE", { enumerable: true, get: function () { return menu_js_2.MENU_SAVE; } });
-    Object.defineProperty(exports, "MENU_PROGRAM", { enumerable: true, get: function () { return menu_js_2.MENU_PROGRAM; } });
+    Object.defineProperty(exports, "MENU_PATCH_FACE", { enumerable: true, get: function () { return menu_js_2.MENU_PATCH_FACE; } });
     Object.defineProperty(exports, "MENU_CONVERT", { enumerable: true, get: function () { return menu_js_2.MENU_CONVERT; } });
     Object.defineProperty(exports, "CONVERTERS", { enumerable: true, get: function () { return converters_js_4.CONVERTERS; } });
     Object.defineProperty(exports, "URL_CONVERTER", { enumerable: true, get: function () { return converters_js_4.URL_CONVERTER; } });
@@ -20758,7 +21139,7 @@ define("app/findbox", ["require", "exports"], function (require, exports) {
         };
     }
 });
-define("app/support", ["require", "exports", "data/index", "editor/index", "patch/index", "view/index"], function (require, exports, index_js_51, index_js_52, index_js_53, index_js_54) {
+define("app/support", ["require", "exports", "data/index", "editor/index", "patch/index", "view/index"], function (require, exports, index_js_52, index_js_53, index_js_54, index_js_55) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.supportPane = supportPane;
@@ -20881,7 +21262,7 @@ define("app/support", ["require", "exports", "data/index", "editor/index", "patc
             else
                 logTab(body);
         };
-        (0, index_js_52.onLog)(() => { if (open && tab === 'log')
+        (0, index_js_53.onLog)(() => { if (open && tab === 'log')
             paint(); });
         paint();
         return {
@@ -20919,11 +21300,11 @@ define("app/support", ["require", "exports", "data/index", "editor/index", "patc
         // Its entries, laid out one to a line - not the Metadata container itself,
         // which a layout draws shut until the cursor comes near it (C5). Copies, since
         // a List adopts what it is built from, and these stay where they are.
-        const entries = new index_js_51.List(markup.children().map((entry) => (0, index_js_53.deepCopy)(entry)));
+        const entries = new index_js_52.List(markup.children().map((entry) => (0, index_js_54.deepCopy)(entry)));
         faces.choose(entries, 'list-stacked');
-        const box = (0, index_js_54.layout)(entries, (0, index_js_54.defaultContext)(metrics, width, faces));
+        const box = (0, index_js_55.layout)(entries, (0, index_js_55.defaultContext)(metrics, width, faces));
         host.style.height = `${box.height + 4}px`;
-        new index_js_54.Renderer(host).render(box);
+        new index_js_55.Renderer(host).render(box);
     }
     /**
      * Whose markup the tab shows: the node a metadata band on the cursor's path
@@ -20933,11 +21314,11 @@ define("app/support", ["require", "exports", "data/index", "editor/index", "patc
     function markupOwner(selection) {
         const path = selection.path();
         for (let at = path.length - 1; at >= 1; at--) {
-            if (path[at] instanceof index_js_51.Metadata)
+            if (path[at] instanceof index_js_52.Metadata)
                 return path[at - 1];
         }
         const focus = selection.focus();
-        return focus instanceof index_js_51.Patch && selection.drawnAsValue() ? selection.focusValue() : focus;
+        return focus instanceof index_js_52.Patch && selection.drawnAsValue() ? selection.focusValue() : focus;
     }
     function channelList(document, redraw) {
         const table = window.document.createElement('table');
@@ -20949,10 +21330,10 @@ define("app/support", ["require", "exports", "data/index", "editor/index", "patc
             Object.assign(cell.style, { textAlign: 'left', padding: '0 10px 4px 0', fontWeight: '600', opacity: '.7' });
             head.appendChild(cell);
         }
-        const rows = new Map((0, index_js_51.countChannels)(document).map((row) => [row.channel.toLowerCase(), row]));
+        const rows = new Map((0, index_js_52.countChannels)(document).map((row) => [row.channel.toLowerCase(), row]));
         // Every channel this editor reads a meaning from is listed, held or not, so
         // its meaning can be turned off before a document uses it.
-        for (const channel of index_js_51.HONORABLE) {
+        for (const channel of index_js_52.HONORABLE) {
             if (!rows.has(channel.toLowerCase()))
                 rows.set(channel.toLowerCase(), { channel, count: 0 });
         }
@@ -20967,17 +21348,17 @@ define("app/support", ["require", "exports", "data/index", "editor/index", "patc
             for (const cell of row.cells)
                 cell.style.padding = '1px 10px 1px 0';
             const isIdentity = channel.toLowerCase() === 'id' || channel.toLowerCase() === 'uid';
-            const honorable = index_js_51.HONORABLE.some((each) => each.toLowerCase() === channel.toLowerCase());
+            const honorable = index_js_52.HONORABLE.some((each) => each.toLowerCase() === channel.toLowerCase());
             if (!isIdentity && !honorable)
                 continue;
             const tick = window.document.createElement('input');
             tick.type = 'checkbox';
             // ID and UID are how a reference finds its node, so they are always read.
-            tick.checked = isIdentity || (0, index_js_51.honored)(channel);
+            tick.checked = isIdentity || (0, index_js_52.honored)(channel);
             tick.disabled = isIdentity;
             tick.title = isIdentity ? 'Always read: a reference finds its node by it' : `Read what ${channel} says`;
             tick.addEventListener('mousedown', (event) => { event.preventDefault(); });
-            tick.addEventListener('change', () => { (0, index_js_51.setHonored)(channel, tick.checked); redraw(); });
+            tick.addEventListener('change', () => { (0, index_js_52.setHonored)(channel, tick.checked); redraw(); });
             box.appendChild(tick);
         }
         return table;
@@ -20988,7 +21369,7 @@ define("app/support", ["require", "exports", "data/index", "editor/index", "patc
         body.append(heading(which));
         const text = window.document.createElement('pre');
         Object.assign(text.style, { margin: '0', font: '12px ui-monospace, SFMono-Regular, Consolas, monospace', whiteSpace: 'pre-wrap' });
-        text.textContent = (0, index_js_53.formatProgram)(patch);
+        text.textContent = (0, index_js_54.formatProgram)(patch);
         body.append(text);
     }
     /**
@@ -21004,17 +21385,17 @@ define("app/support", ["require", "exports", "data/index", "editor/index", "patc
         const path = selection.path();
         for (let at = path.length - 1; at >= 0; at--) {
             const node = path[at];
-            if (node instanceof index_js_51.Patch && at < path.length - 1)
+            if (node instanceof index_js_52.Patch && at < path.length - 1)
                 return { patch: node, which: 'The Patch whose program the selection is in' };
         }
         const focus = selection.focus();
-        if (focus instanceof index_js_51.Patch)
+        if (focus instanceof index_js_52.Patch)
             return { patch: focus, which: 'The Patch the selection is on' };
         return { patch: editor.session.program, which: 'The session: every edit to this document, as a program' };
     }
     // --- Log --------------------------------------------------------------------
     function logTab(body) {
-        const entries = (0, index_js_52.logEntries)();
+        const entries = (0, index_js_53.logEntries)();
         if (entries.length === 0) {
             body.append(note('Nothing yet. Opening a file, dropping one in, accepting a button and saving are noted here.'));
             return;
@@ -21071,7 +21452,7 @@ define("app/support", ["require", "exports", "data/index", "editor/index", "patc
         catch { /* not remembered */ }
     }
 });
-define("app/derived", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_55, index_js_56) {
+define("app/derived", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_56, index_js_57) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.derivedDocument = derivedDocument;
@@ -21130,10 +21511,10 @@ define("app/derived", ["require", "exports", "data/index", "patch/index"], funct
     const ORDER = 'order';
     /** `child(<key>)`: SPECIFICATION section 4.3's Keyed-List argument form. */
     function byKey(key) {
-        return new index_js_55.Keyed([new index_js_55.Text(key)]);
+        return new index_js_56.Keyed([new index_js_56.Text(key)]);
     }
     function field(key, value) {
-        return new index_js_55.Keyed([new index_js_55.Text(key), value]);
+        return new index_js_56.Keyed([new index_js_56.Text(key), value]);
     }
     /**
      * The four instructions the two derivations share: out to the record, in to the
@@ -21147,62 +21528,62 @@ define("app/derived", ["require", "exports", "data/index", "patch/index"], funct
      */
     function theOrder() {
         return [
-            (0, index_js_56.writeOpcodeCall)(index_js_56.Opcode.Parent, index_js_55.Quantity.narrowest(2)),
-            (0, index_js_56.writeOpcodeCall)(index_js_56.Opcode.Child, byKey(ORDER)),
-            (0, index_js_56.writeOpcodeCall)(index_js_56.Opcode.Child, index_js_55.Quantity.narrowest(1)),
+            (0, index_js_57.writeOpcodeCall)(index_js_57.Opcode.Parent, index_js_56.Quantity.narrowest(2)),
+            (0, index_js_57.writeOpcodeCall)(index_js_57.Opcode.Child, byKey(ORDER)),
+            (0, index_js_57.writeOpcodeCall)(index_js_57.Opcode.Child, index_js_56.Quantity.narrowest(1)),
         ];
     }
     function derivedDocument() {
-        const order = new index_js_55.List([
-            new index_js_55.Text('Analytical Engine'),
-            new index_js_55.Text('Punched cards'),
+        const order = new index_js_56.List([
+            new index_js_56.Text('Analytical Engine'),
+            new index_js_56.Text('Punched cards'),
         ]);
         // The list with one more thing in it. `append` edits the focus rather than
         // the focus' parent, so the copy is rooted at the order itself and the record
         // above it is never copied at all - which is section 4.7's truncation, on a
         // document small enough to count.
-        const withDelivery = new index_js_55.Patch([
+        const withDelivery = new index_js_56.Patch([
             ...theOrder(),
-            (0, index_js_56.writeOpcodeCall)(index_js_56.Opcode.Append, new index_js_55.Text('Delivery')),
+            (0, index_js_57.writeOpcodeCall)(index_js_57.Opcode.Append, new index_js_56.Text('Delivery')),
         ]);
         // The list with one fewer. `remove` acts on the focus' seat, so this descends
         // to the first item, takes it out, and steps back up to the list it came
         // from - which is the copy, because the cursor moved into the new version of
         // the tree when the edit landed.
-        const withoutTheEngine = new index_js_55.Patch([
+        const withoutTheEngine = new index_js_56.Patch([
             ...theOrder(),
-            (0, index_js_56.writeOpcodeCall)(index_js_56.Opcode.Child, index_js_55.Quantity.narrowest(0)),
-            (0, index_js_56.writeOpcodeCall)(index_js_56.Opcode.Remove, index_js_55.Quantity.narrowest(1)),
-            (0, index_js_56.writeOpcodeCall)(index_js_56.Opcode.Parent, index_js_55.Quantity.narrowest(1)),
+            (0, index_js_57.writeOpcodeCall)(index_js_57.Opcode.Child, index_js_56.Quantity.narrowest(0)),
+            (0, index_js_57.writeOpcodeCall)(index_js_57.Opcode.Remove, index_js_56.Quantity.narrowest(1)),
+            (0, index_js_57.writeOpcodeCall)(index_js_57.Opcode.Parent, index_js_56.Quantity.narrowest(1)),
         ]);
-        return new index_js_55.List([
+        return new index_js_56.List([
             field(ORDER, order),
             field('with delivery', withDelivery),
             field('without the engine', withoutTheEngine),
         ]);
     }
 });
-define("app/drop", ["require", "exports", "codec/index", "data/index", "view/index"], function (require, exports, index_js_57, index_js_58, index_js_59) {
+define("app/drop", ["require", "exports", "codec/index", "data/index", "view/index"], function (require, exports, index_js_58, index_js_59, index_js_60) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.IMAGE_FORMAT = void 0;
     exports.classifyDrop = classifyDrop;
     exports.IMAGE_FORMAT = 'image';
     function classifyDrop(name, bytes) {
-        if ((0, index_js_59.imageShape)(bytes) !== undefined)
+        if ((0, index_js_60.imageShape)(bytes) !== undefined)
             return { kind: 'value', value: tagged(bytes, exports.IMAGE_FORMAT) };
         if (name.toLowerCase().endsWith('.fold'))
             return { kind: 'document' };
-        const clean = (0, index_js_57.decode)(bytes).diagnostics.every((diagnostic) => diagnostic.classification === 'valid');
-        return clean ? { kind: 'document' } : { kind: 'value', value: new index_js_58.Bytes(bytes) };
+        const clean = (0, index_js_58.decode)(bytes).diagnostics.every((diagnostic) => diagnostic.classification === 'valid');
+        return clean ? { kind: 'document' } : { kind: 'value', value: new index_js_59.Bytes(bytes) };
     }
     function tagged(bytes, format) {
-        const value = new index_js_58.Bytes(bytes);
-        value.metadata = new index_js_58.Metadata([new index_js_58.Keyed([new index_js_58.Text('format'), new index_js_58.Text(format)])]);
+        const value = new index_js_59.Bytes(bytes);
+        value.metadata = new index_js_59.Metadata([new index_js_59.Keyed([new index_js_59.Text('format'), new index_js_59.Text(format)])]);
         return value;
     }
 });
-define("app/counter", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_60, index_js_61) {
+define("app/counter", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_61, index_js_62) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.counterDocument = counterDocument;
@@ -21227,22 +21608,22 @@ define("app/counter", ["require", "exports", "data/index", "patch/index"], funct
      * re-evaluates against it, and is a button again.
      */
     function step(label, service, toward) {
-        const count = new index_js_60.Patch([(0, index_js_61.writeOpcodeCall)(index_js_61.Opcode.Parent, index_js_60.Quantity.narrowest(4)), (0, index_js_61.writeOpcodeCall)(toward)]);
-        return new index_js_60.Patch([
-            (0, index_js_61.writeOpcodeCall)(toward),
-            (0, index_js_61.writeOpcodeCall)(index_js_61.Opcode.Write, new index_js_60.Patch([(0, index_js_61.writeServiceCall)(new index_js_60.Text(service), count, index_js_60.Quantity.narrowest(1))])),
-            (0, index_js_61.writeOpcodeCall)(index_js_61.Opcode.Sync, new index_js_60.Text(label)),
+        const count = new index_js_61.Patch([(0, index_js_62.writeOpcodeCall)(index_js_62.Opcode.Parent, index_js_61.Quantity.narrowest(4)), (0, index_js_62.writeOpcodeCall)(toward)]);
+        return new index_js_61.Patch([
+            (0, index_js_62.writeOpcodeCall)(toward),
+            (0, index_js_62.writeOpcodeCall)(index_js_62.Opcode.Write, new index_js_61.Patch([(0, index_js_62.writeServiceCall)(new index_js_61.Text(service), count, index_js_61.Quantity.narrowest(1))])),
+            (0, index_js_62.writeOpcodeCall)(index_js_62.Opcode.Sync, new index_js_61.Text(label)),
         ]);
     }
     function counterDocument() {
-        return new index_js_60.List([
-            step('decrement', '-', index_js_61.Opcode.Next),
-            index_js_60.Quantity.narrowest(4),
-            step('increment', '+', index_js_61.Opcode.Previous),
+        return new index_js_61.List([
+            step('decrement', '-', index_js_62.Opcode.Next),
+            index_js_61.Quantity.narrowest(4),
+            step('increment', '+', index_js_62.Opcode.Previous),
         ]);
     }
 });
-define("app/example", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_62, index_js_63) {
+define("app/example", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_63, index_js_64) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.exampleDocument = exampleDocument;
@@ -21259,13 +21640,13 @@ define("app/example", ["require", "exports", "data/index", "patch/index"], funct
      * holds both as a Choice Point until a second example says which.
      */
     function exampleDocument() {
-        return new index_js_62.List([
-            new index_js_62.List([index_js_62.Quantity.narrowest(2), index_js_62.Quantity.narrowest(3)]),
-            new index_js_62.Patch([(0, index_js_63.writeOpcodeCall)(index_js_63.Opcode.Previous, index_js_62.Quantity.narrowest(1))]),
+        return new index_js_63.List([
+            new index_js_63.List([index_js_63.Quantity.narrowest(2), index_js_63.Quantity.narrowest(3)]),
+            new index_js_63.Patch([(0, index_js_64.writeOpcodeCall)(index_js_64.Opcode.Previous, index_js_63.Quantity.narrowest(1))]),
         ]);
     }
 });
-define("app/invoice", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_64, index_js_65) {
+define("app/invoice", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_65, index_js_66) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.invoiceDocument = invoiceDocument;
@@ -21297,7 +21678,7 @@ define("app/invoice", ["require", "exports", "data/index", "patch/index"], funct
      * a paste, so a new formula is a hand-written program for now.
      */
     function field(key, value) {
-        return new index_js_64.Keyed([new index_js_64.Text(key), value]);
+        return new index_js_65.Keyed([new index_js_65.Text(key), value]);
     }
     /**
      * A reading of another field, from where an operand sits: out of the operand,
@@ -21305,15 +21686,15 @@ define("app/invoice", ["require", "exports", "data/index", "patch/index"], funct
      * the field's value by its name.
      */
     function cell(key) {
-        return new index_js_64.Patch([
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Parent, index_js_64.Quantity.narrowest(4)),
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Child, new index_js_64.Keyed([new index_js_64.Text(key)])),
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Child, index_js_64.Quantity.narrowest(1)),
+        return new index_js_65.Patch([
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Parent, index_js_65.Quantity.narrowest(4)),
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Child, new index_js_65.Keyed([new index_js_65.Text(key)])),
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Child, index_js_65.Quantity.narrowest(1)),
         ]);
     }
     /** A Patch whose one statement is a service call: it evaluates to what the service answers. */
     function formula(service, ...operands) {
-        return new index_js_64.Patch([(0, index_js_65.writeServiceCall)(new index_js_64.Text(service), ...operands)]);
+        return new index_js_65.Patch([(0, index_js_66.writeServiceCall)(new index_js_65.Text(service), ...operands)]);
     }
     /**
      * A choice, the way `if` is used (Chris, 2026-09-26): call it for the Fold
@@ -21322,30 +21703,30 @@ define("app/invoice", ["require", "exports", "data/index", "patch/index"], funct
      * reading - and a reading sits at the depth an operand does, so `cell` serves.
      */
     function choice(condition, then, otherwise) {
-        return new index_js_64.Patch([
-            (0, index_js_65.writeServiceCall)(new index_js_64.Text('if')),
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Child, index_js_64.Quantity.narrowest(index_js_65.IF_CONDITION)),
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Write, condition),
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Next, index_js_64.Quantity.narrowest(index_js_65.IF_THEN - index_js_65.IF_CONDITION)),
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Write, then),
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Next, index_js_64.Quantity.narrowest(index_js_65.IF_ELSE - index_js_65.IF_THEN)),
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Write, otherwise),
-            (0, index_js_65.writeOpcodeCall)(index_js_65.Opcode.Next, index_js_64.Quantity.narrowest(index_js_65.IF_RETURN - index_js_65.IF_ELSE)),
+        return new index_js_65.Patch([
+            (0, index_js_66.writeServiceCall)(new index_js_65.Text('if')),
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Child, index_js_65.Quantity.narrowest(index_js_66.IF_CONDITION)),
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Write, condition),
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Next, index_js_65.Quantity.narrowest(index_js_66.IF_THEN - index_js_66.IF_CONDITION)),
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Write, then),
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Next, index_js_65.Quantity.narrowest(index_js_66.IF_ELSE - index_js_66.IF_THEN)),
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Write, otherwise),
+            (0, index_js_66.writeOpcodeCall)(index_js_66.Opcode.Next, index_js_65.Quantity.narrowest(index_js_66.IF_RETURN - index_js_66.IF_ELSE)),
         ]);
     }
     function invoiceDocument() {
-        return new index_js_64.List([
-            field('item', new index_js_64.Text('Punched cards')),
-            field('price', index_js_64.Quantity.narrowest(12)),
-            field('quantity', index_js_64.Quantity.narrowest(3)),
+        return new index_js_65.List([
+            field('item', new index_js_65.Text('Punched cards')),
+            field('price', index_js_65.Quantity.narrowest(12)),
+            field('quantity', index_js_65.Quantity.narrowest(3)),
             field('subtotal', formula('*', cell('price'), cell('quantity'))),
-            field('free delivery', formula('>=', cell('subtotal'), index_js_64.Quantity.narrowest(30))),
-            field('delivery', choice(cell('free delivery'), index_js_64.Quantity.narrowest(0), index_js_64.Quantity.narrowest(5))),
+            field('free delivery', formula('>=', cell('subtotal'), index_js_65.Quantity.narrowest(30))),
+            field('delivery', choice(cell('free delivery'), index_js_65.Quantity.narrowest(0), index_js_65.Quantity.narrowest(5))),
             field('total', formula('+', cell('subtotal'), cell('delivery'))),
         ]);
     }
 });
-define("app/kennedy", ["require", "exports", "data/index"], function (require, exports, index_js_66) {
+define("app/kennedy", ["require", "exports", "data/index"], function (require, exports, index_js_67) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.KENNEDY_CLAUSE = void 0;
@@ -21384,7 +21765,7 @@ define("app/kennedy", ["require", "exports", "data/index"], function (require, e
      */
     exports.KENNEDY_CLAUSE = 'Ask not what your country can do for you ,';
     function kennedyDocument() {
-        return new index_js_66.List([new index_js_66.List(exports.KENNEDY_CLAUSE.split(' ').map((word) => new index_js_66.Text(word)))]);
+        return new index_js_67.List([new index_js_67.List(exports.KENNEDY_CLAUSE.split(' ').map((word) => new index_js_67.Text(word)))]);
     }
 });
 define("app/menu", ["require", "exports"], function (require, exports) {
@@ -21403,9 +21784,19 @@ define("app/menu", ["require", "exports"], function (require, exports) {
      * element is document and may never be. Section 6.1's rule is about the
      * document; a menu is not in it, is not addressable by a cursor, and is not
      * encoded. Drawing it through the layout would be claiming otherwise.
+     *
+     * **It can be driven from the keyboard** (Chris, 2026-11-24). The menu key or
+     * shift+F10 opens it at the caret, about the selection; up and down move
+     * between the entries that can be chosen, right or enter opens a submenu, left
+     * closes one, enter or space chooses, and escape closes a submenu and then the
+     * menu. While it is open every key goes to it and none reaches the editor,
+     * because an arrow that moved the cursor behind an open menu would change what
+     * the menu is about without redrawing it.
      */
     /** How far from the pointer the menu is placed, so it does not sit under it. */
     const OFFSET = 2;
+    /** What choosing an entry does, kept beside its element for enter and space. */
+    const choosers = new WeakMap();
     /**
      * Wire a right-click on the host to a menu over the current editor.
      *
@@ -21416,6 +21807,7 @@ define("app/menu", ["require", "exports"], function (require, exports) {
     function contextMenu(current, host, after, page = () => []) {
         const root = document.createElement('div');
         root.className = 'fold-menu';
+        root.setAttribute('role', 'menu');
         root.hidden = true;
         document.body.appendChild(root);
         const close = () => {
@@ -21424,21 +21816,32 @@ define("app/menu", ["require", "exports"], function (require, exports) {
             root.hidden = true;
             root.replaceChildren();
         };
-        const open = (x, y) => {
+        const open = (x, y, keyboard = false) => {
             const editor = current();
             if (editor === undefined)
                 return;
             // Two coordinate frames, and both are needed: the menu is *placed* in the
             // viewport and asks its question in the document's own space, because that
-            // is where the layout the editor hit-tests against lives.
+            // is where the layout the editor hit-tests against lives. From the keyboard
+            // there is no point to ask about - the menu is about the selection.
             const host_ = host.getBoundingClientRect();
-            const items = editor.menu(x - host_.left, y - host_.top);
+            const items = keyboard ? editor.menu() : editor.menu(x - host_.left, y - host_.top);
             root.replaceChildren(...items.map((item) => render(item, editor, close, after)), ...page().map((item, index) => pageEntry(item, index === 0, close, after)));
             root.hidden = false;
             // Placed after it is in the document, because staying on screen needs its
             // measured size and a hidden element has none.
-            root.style.left = `${Math.min(x + OFFSET, innerWidth - root.offsetWidth - OFFSET)}px`;
-            root.style.top = `${Math.min(y + OFFSET, innerHeight - root.offsetHeight - OFFSET)}px`;
+            root.style.left = `${Math.max(OFFSET, Math.min(x + OFFSET, innerWidth - root.offsetWidth - OFFSET))}px`;
+            root.style.top = `${Math.max(OFFSET, Math.min(y + OFFSET, innerHeight - root.offsetHeight - OFFSET))}px`;
+            // A keyboard has nowhere to point, so it starts on the first entry; a
+            // pointer starts on nothing, as every menu does.
+            if (keyboard)
+                step(root, 1);
+        };
+        /** Open at the caret, about the selection. */
+        const openAtCaret = () => {
+            const caret = host.querySelector('.caret, .element-cursor');
+            const box = caret instanceof HTMLElement ? caret.getBoundingClientRect() : host.getBoundingClientRect();
+            open(box.left, box.bottom, true);
         };
         /**
          * **A right-click changes nothing about the cursor** (Chris, 2026-09-09).
@@ -21462,6 +21865,27 @@ define("app/menu", ["require", "exports"], function (require, exports) {
             after();
             open(event.clientX, event.clientY);
         });
+        // The page around the document, and the keyboard. The host is only as tall as
+        // what is drawn, so a right-click on the empty page below a short document
+        // lands on the body - which is the background, and its menu is the document's.
+        // The menu key and shift+F10 fire `contextmenu` at whatever has the focus,
+        // which is the invisible input that follows the caret, so that one opens at
+        // the caret and is about the selection.
+        addEventListener('contextmenu', (event) => {
+            const target = event.target;
+            if (target === document.body || target === document.documentElement) {
+                event.preventDefault();
+                after();
+                open(event.clientX, event.clientY);
+            }
+            else if (target instanceof HTMLElement && target.id === 'fold-input') {
+                event.preventDefault();
+                if (!root.hidden)
+                    return;
+                after();
+                openAtCaret();
+            }
+        });
         // Anywhere else, and escape. Captured on the window rather than bound to a
         // backdrop element, because a backdrop that swallows the click would cost the
         // reader the press that put the cursor where they were already aiming.
@@ -21469,27 +21893,196 @@ define("app/menu", ["require", "exports"], function (require, exports) {
             if (!root.hidden && !root.contains(event.target))
                 close();
         }, true);
-        addEventListener('keydown', (event) => { if (event.key === 'Escape')
-            close(); }, true);
+        addEventListener('keydown', (event) => {
+            if (root.hidden) {
+                // The menu key and shift+F10, caught here as well as by `contextmenu`
+                // because not every browser and platform turns them into that event -
+                // and when one does, the menu is already open and that event is ignored.
+                const asks = event.key === 'ContextMenu'
+                    || (event.key === 'F10' && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey);
+                if (!asks || current() === undefined)
+                    return;
+                if (event.target instanceof Element && event.target.closest('#fold-find') !== null)
+                    return;
+                event.preventDefault();
+                event.stopPropagation();
+                after();
+                openAtCaret();
+                return;
+            }
+            // A chord with ctrl, alt or meta is the browser's or the page's, and closes
+            // the menu rather than being swallowed by it.
+            if (event.ctrlKey || event.altKey || event.metaKey) {
+                close();
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            navigate(event.key);
+        }, true);
         addEventListener('resize', close);
+        /** One key, while the menu is open. */
+        const navigate = (key) => {
+            const level = deepest(root);
+            const active = activeIn(level);
+            switch (key) {
+                case 'ArrowDown':
+                    step(level, 1);
+                    return;
+                case 'ArrowUp':
+                    step(level, -1);
+                    return;
+                case 'Home':
+                    step(level, 1, true);
+                    return;
+                case 'End':
+                    step(level, -1, true);
+                    return;
+                case 'ArrowRight':
+                    if (active !== undefined)
+                        enter(active);
+                    return;
+                case 'ArrowLeft':
+                    leave(level);
+                    return;
+                case 'Escape':
+                    if (!leave(level)) {
+                        close();
+                        after();
+                    }
+                    return;
+                case 'Enter':
+                case ' ': {
+                    if (active === undefined)
+                        return;
+                    if (active.dataset['submenu'] === 'true') {
+                        enter(active);
+                        return;
+                    }
+                    choosers.get(active)?.();
+                    return;
+                }
+                default:
+                    return;
+            }
+        };
         return { open, close };
+    }
+    // --- Keyboard state, held in the elements ----------------------------------
+    //
+    // Which entry is active and which submenu is open are attributes rather than
+    // variables, for the reason the submenu was CSS state before there was a
+    // keyboard: the elements already are the menu, and a second copy of where the
+    // reader is in it would be one more thing to keep in step with the pointer.
+    /** The entries of one level - its own, not its submenus'. */
+    function entriesOf(level) {
+        return [...level.children].filter((child) => (child instanceof HTMLElement && child.classList.contains('fold-menu-item')));
+    }
+    function choosable(entry) {
+        return entry.getAttribute('aria-disabled') !== 'true';
+    }
+    function activeIn(level) {
+        return entriesOf(level).find((entry) => entry.dataset['active'] === 'true');
+    }
+    function activate(level, entry) {
+        for (const other of entriesOf(level)) {
+            if (other === entry)
+                continue;
+            delete other.dataset['active'];
+            // A sibling's submenu closes when the reader moves off it, as hovering does.
+            if (other.dataset['open'] === 'true')
+                shut(other);
+        }
+        entry.dataset['active'] = 'true';
+    }
+    /** The innermost open level: where the arrow keys act. */
+    function deepest(root) {
+        let level = root;
+        for (;;) {
+            const open = entriesOf(level).find((entry) => entry.dataset['open'] === 'true');
+            const nested = open?.querySelector(':scope > .fold-submenu');
+            if (!(nested instanceof HTMLElement))
+                return level;
+            level = nested;
+        }
+    }
+    /**
+     * Move to the next choosable entry in `by`'s direction, wrapping - or, with
+     * `edge`, to the first or last one.
+     */
+    function step(level, by, edge = false) {
+        const entries = entriesOf(level);
+        const live = entries.filter(choosable);
+        if (live.length === 0)
+            return;
+        const active = activeIn(level);
+        let next;
+        if (edge || active === undefined) {
+            next = by === 1 ? live[0] : live[live.length - 1];
+        }
+        else {
+            const at = live.indexOf(active);
+            next = live[(at + by + live.length) % live.length];
+        }
+        if (next !== undefined)
+            activate(level, next);
+    }
+    /** Open the submenu of `entry` and put the reader on its first entry. */
+    function enter(entry) {
+        if (entry.dataset['submenu'] !== 'true' || !choosable(entry))
+            return;
+        const nested = entry.querySelector(':scope > .fold-submenu');
+        if (!(nested instanceof HTMLElement))
+            return;
+        entry.dataset['open'] = 'true';
+        if (activeIn(nested) === undefined)
+            step(nested, 1);
+    }
+    /** Close the submenu `level` is, leaving its entry active. False at the top. */
+    function leave(level) {
+        const owner = level.parentElement;
+        if (!level.classList.contains('fold-submenu') || owner === null)
+            return false;
+        shut(owner);
+        return true;
+    }
+    function shut(entry) {
+        delete entry.dataset['open'];
+        const nested = entry.querySelector(':scope > .fold-submenu');
+        if (!(nested instanceof HTMLElement))
+            return;
+        for (const child of entriesOf(nested)) {
+            delete child.dataset['active'];
+            if (child.dataset['open'] === 'true')
+                shut(child);
+        }
+    }
+    /** The pointer and the keyboard share one mark: hovering an entry makes it active. */
+    function hoverable(element) {
+        element.addEventListener('mouseenter', () => {
+            const level = element.parentElement;
+            if (level !== null && choosable(element))
+                activate(level, element);
+        });
     }
     /**
      * One entry.
      *
-     * A submenu is a nested list that opens on hover, which is the one interaction
-     * in this file with any state in it - and it is CSS state rather than a
-     * variable, because `:hover` already knows.
+     * A submenu is a nested list that opens on hover or on the right arrow - hover
+     * is CSS state, because `:hover` already knows, and the arrow sets the
+     * `data-open` the stylesheet reads beside it.
      */
     function render(item, editor, close, after) {
         const element = document.createElement('div');
         element.className = 'fold-menu-item';
+        element.setAttribute('role', 'menuitem');
         if (!item.enabled)
             element.setAttribute('aria-disabled', 'true');
         if (item.checked === true)
             element.dataset['checked'] = 'true';
         if (item.items !== undefined)
             element.dataset['submenu'] = 'true';
+        hoverable(element);
         const label = document.createElement('span');
         label.className = 'fold-menu-label';
         label.textContent = item.label;
@@ -21503,20 +22096,25 @@ define("app/menu", ["require", "exports"], function (require, exports) {
         if (item.items !== undefined) {
             const nested = document.createElement('div');
             nested.className = 'fold-menu fold-submenu';
+            nested.setAttribute('role', 'menu');
             nested.replaceChildren(...item.items.map((child) => render(child, editor, close, after)));
             element.appendChild(nested);
         }
         const action = item.action;
         if (action !== undefined && item.enabled) {
+            const choose = () => {
+                editor.perform(action);
+                close();
+                after();
+            };
+            choosers.set(element, choose);
             element.addEventListener('mousedown', (event) => {
                 // Stopped rather than merely defaulted: the window listener that closes
                 // the menu is on the capture phase, and a press that closed the menu
                 // before its own handler ran would be a menu nothing could be chosen from.
                 event.preventDefault();
                 event.stopPropagation();
-                editor.perform(action);
-                close();
-                after();
+                choose();
             });
         }
         return element;
@@ -21525,8 +22123,10 @@ define("app/menu", ["require", "exports"], function (require, exports) {
     function pageEntry(item, first, close, after) {
         const element = document.createElement('div');
         element.className = 'fold-menu-item';
+        element.setAttribute('role', 'menuitem');
         if (first)
             element.dataset['separated'] = 'true';
+        hoverable(element);
         const label = document.createElement('span');
         label.className = 'fold-menu-label';
         label.textContent = item.label;
@@ -21537,17 +22137,21 @@ define("app/menu", ["require", "exports"], function (require, exports) {
             key.textContent = item.shortcut;
             element.appendChild(key);
         }
-        element.addEventListener('mousedown', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
+        const choose = () => {
             item.run();
             close();
             after();
+        };
+        choosers.set(element, choose);
+        element.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            choose();
         });
         return element;
     }
 });
-define("app/picture", ["require", "exports", "codec/index", "data/index"], function (require, exports, index_js_67, index_js_68) {
+define("app/picture", ["require", "exports", "codec/index", "data/index"], function (require, exports, index_js_68, index_js_69) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.pictureDocument = pictureDocument;
@@ -21576,27 +22180,27 @@ define("app/picture", ["require", "exports", "codec/index", "data/index"], funct
      * unreadable would demonstrate it less.
      */
     function pictureDocument() {
-        const bmp = new index_js_68.Bytes(gradient(96, 64));
-        bmp.metadata = new index_js_68.Metadata([new index_js_68.Keyed([new index_js_68.Text('format'), new index_js_68.Text('image')])]);
-        const untagged = new index_js_68.Bytes(gradient(96, 64));
-        const document = new index_js_68.List([
-            new index_js_68.Text('This'),
-            new index_js_68.Text('is'),
-            new index_js_68.Text('a'),
+        const bmp = new index_js_69.Bytes(gradient(96, 64));
+        bmp.metadata = new index_js_69.Metadata([new index_js_69.Keyed([new index_js_69.Text('format'), new index_js_69.Text('image')])]);
+        const untagged = new index_js_69.Bytes(gradient(96, 64));
+        const document = new index_js_69.List([
+            new index_js_69.Text('This'),
+            new index_js_69.Text('is'),
+            new index_js_69.Text('a'),
             bmp,
-            new index_js_68.Text('and'),
-            new index_js_68.Text('this'),
-            new index_js_68.Text('is'),
-            new index_js_68.Text('the'),
-            new index_js_68.Text('same'),
-            new index_js_68.Text('bytes'),
-            new index_js_68.Text('untagged'),
+            new index_js_69.Text('and'),
+            new index_js_69.Text('this'),
+            new index_js_69.Text('is'),
+            new index_js_69.Text('the'),
+            new index_js_69.Text('same'),
+            new index_js_69.Text('bytes'),
+            new index_js_69.Text('untagged'),
             untagged,
         ]);
         // Through the codec like every other page here: what is drawn is the tree
         // that came back out of the bytes, so the picture has survived being written
         // down and read again before anybody looks at it.
-        return (0, index_js_67.decode)((0, index_js_67.encode)(document)).root;
+        return (0, index_js_68.decode)((0, index_js_68.encode)(document)).root;
     }
     /**
      * A 24-bit BMP holding a two-axis gradient: red across, green down, blue on the
@@ -21647,7 +22251,7 @@ define("app/picture", ["require", "exports", "codec/index", "data/index"], funct
         return bytes;
     }
 });
-define("app/reference", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_69, index_js_70) {
+define("app/reference", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_70, index_js_71) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.referenceDocument = referenceDocument;
@@ -21708,27 +22312,27 @@ define("app/reference", ["require", "exports", "data/index", "patch/index"], fun
     const CUSTOMER = 'customer';
     /** `ID(customer)`: one instruction, and the whole of a reference at 2a. */
     function reference(name) {
-        return new index_js_69.Patch([(0, index_js_70.writeOpcodeCall)(index_js_70.Opcode.ID, new index_js_69.Text(name))]);
+        return new index_js_70.Patch([(0, index_js_71.writeOpcodeCall)(index_js_71.Opcode.ID, new index_js_70.Text(name))]);
     }
     /** A node carrying `ID` metadata, which is what makes it findable by name. */
     function tagged(node, id) {
-        node.metadata = new index_js_69.Metadata([new index_js_69.Keyed([new index_js_69.Text('ID'), new index_js_69.Text(id)])]);
+        node.metadata = new index_js_70.Metadata([new index_js_70.Keyed([new index_js_70.Text('ID'), new index_js_70.Text(id)])]);
         return node;
     }
     function field(key, value) {
-        return new index_js_69.Keyed([new index_js_69.Text(key), value]);
+        return new index_js_70.Keyed([new index_js_70.Text(key), value]);
     }
     function referenceDocument() {
-        const name = tagged(new index_js_69.Text('Ada Lovelace'), CUSTOMER);
-        const order = new index_js_69.List([
-            field('item', new index_js_69.Text('Analytical Engine')),
-            field('quantity', index_js_69.Quantity.narrowest(1)),
+        const name = tagged(new index_js_70.Text('Ada Lovelace'), CUSTOMER);
+        const order = new index_js_70.List([
+            field('item', new index_js_70.Text('Analytical Engine')),
+            field('quantity', index_js_70.Quantity.narrowest(1)),
             // `parent(2)`: out of the Keyed List holding it, then out of the order.
             // Its value is therefore the order, which contains it - section 4.4's
             // containing case, and the one the view has to be the one to notice.
-            field('part of', new index_js_69.Patch([(0, index_js_70.writeOpcodeCall)(index_js_70.Opcode.Parent, index_js_69.Quantity.narrowest(2))])),
+            field('part of', new index_js_70.Patch([(0, index_js_71.writeOpcodeCall)(index_js_71.Opcode.Parent, index_js_70.Quantity.narrowest(2))])),
         ]);
-        return new index_js_69.List([
+        return new index_js_70.List([
             field(CUSTOMER, name),
             field('ship to', reference(CUSTOMER)),
             field('bill to', reference(CUSTOMER)),
@@ -21736,7 +22340,7 @@ define("app/reference", ["require", "exports", "data/index", "patch/index"], fun
         ]);
     }
 });
-define("app/snake", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_71, index_js_72) {
+define("app/snake", ["require", "exports", "data/index", "patch/index"], function (require, exports, index_js_72, index_js_73) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.snakeDocument = snakeDocument;
@@ -21766,19 +22370,19 @@ define("app/snake", ["require", "exports", "data/index", "patch/index"], functio
      */
     function snakeDocument() {
         // From its own seat, three along is the word; the first letter goes.
-        const dropS = new index_js_71.Patch([
-            (0, index_js_72.writeOpcodeCall)(index_js_72.Opcode.Next, index_js_71.Quantity.narrowest(3)),
-            (0, index_js_72.writeOpcodeCall)(index_js_72.Opcode.Child, index_js_71.Quantity.narrowest(0)),
-            (0, index_js_72.writeOpcodeCall)(index_js_72.Opcode.Remove),
-            (0, index_js_72.writeOpcodeCall)(index_js_72.Opcode.Sync, new index_js_71.Text('drop s')),
+        const dropS = new index_js_72.Patch([
+            (0, index_js_73.writeOpcodeCall)(index_js_73.Opcode.Next, index_js_72.Quantity.narrowest(3)),
+            (0, index_js_73.writeOpcodeCall)(index_js_73.Opcode.Child, index_js_72.Quantity.narrowest(0)),
+            (0, index_js_73.writeOpcodeCall)(index_js_73.Opcode.Remove),
+            (0, index_js_73.writeOpcodeCall)(index_js_73.Opcode.Sync, new index_js_72.Text('drop s')),
         ]);
         // From its own seat, one back is the word; one more letter on the end.
-        const addS = new index_js_71.Patch([
-            (0, index_js_72.writeOpcodeCall)(index_js_72.Opcode.Previous),
-            (0, index_js_72.writeOpcodeCall)(index_js_72.Opcode.Append, new index_js_71.Text('s')),
-            (0, index_js_72.writeOpcodeCall)(index_js_72.Opcode.Sync, new index_js_71.Text('add s')),
+        const addS = new index_js_72.Patch([
+            (0, index_js_73.writeOpcodeCall)(index_js_73.Opcode.Previous),
+            (0, index_js_73.writeOpcodeCall)(index_js_73.Opcode.Append, new index_js_72.Text('s')),
+            (0, index_js_73.writeOpcodeCall)(index_js_73.Opcode.Sync, new index_js_72.Text('add s')),
         ]);
-        return new index_js_71.List([dropS, new index_js_71.Text('Snake'), new index_js_71.Text('says'), new index_js_71.Text('sss'), addS]);
+        return new index_js_72.List([dropS, new index_js_72.Text('Snake'), new index_js_72.Text('says'), new index_js_72.Text('sss'), addS]);
     }
 });
 /**
@@ -21856,7 +22460,7 @@ define("app/title", ["require", "exports"], function (require, exports) {
         return named === '' ? exports.UNTITLED : named;
     }
 });
-define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/index"], function (require, exports, index_js_73, index_js_74, index_js_75) {
+define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/index"], function (require, exports, index_js_74, index_js_75, index_js_76) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ASSERTED = exports.VERIFIED = exports.COST_CHANNEL = exports.CONFIDENCE_CHANNEL = exports.TRUST_CHANNEL = exports.ELAPSED_CHANNEL = exports.SOURCE_CHANNEL = exports.RESULT_CHANNEL = exports.TRACE_TASK = void 0;
@@ -21967,15 +22571,15 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
      * that does not exist.
      */
     function step(tool, args, provenance) {
-        const call = new index_js_74.Keyed([new index_js_74.Text(tool), ...args]);
-        const entries = [pair(exports.SOURCE_CHANNEL, new index_js_74.Text(provenance.source))];
+        const call = new index_js_75.Keyed([new index_js_75.Text(tool), ...args]);
+        const entries = [pair(exports.SOURCE_CHANNEL, new index_js_75.Text(provenance.source))];
         if (provenance.result !== undefined)
             entries.push(pair(exports.RESULT_CHANNEL, provenance.result));
         if (provenance.elapsed !== undefined) {
             entries.push(pair(exports.ELAPSED_CHANNEL, withUnit(provenance.elapsed, 'ms')));
         }
         if (provenance.trust !== undefined)
-            entries.push(pair(exports.TRUST_CHANNEL, new index_js_74.Text(provenance.trust)));
+            entries.push(pair(exports.TRUST_CHANNEL, new index_js_75.Text(provenance.trust)));
         if (provenance.confidence !== undefined) {
             // `narrowest` rather than a chosen width, because a trace has no opinion
             // about how wide a confidence is - it has a number, and the data layer
@@ -21987,27 +22591,27 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
             // as. `Quantity.characters` fixed that where it belonged, so a chosen width
             // would draw correctly now. This line stays as it is, which is the outcome
             // worth noticing: the workaround and the right answer were the same line.
-            entries.push(pair(exports.CONFIDENCE_CHANNEL, index_js_74.Quantity.narrowest(provenance.confidence)));
+            entries.push(pair(exports.CONFIDENCE_CHANNEL, index_js_75.Quantity.narrowest(provenance.confidence)));
         }
         if (provenance.cost !== undefined) {
             entries.push(pair(exports.COST_CHANNEL, withUnit(provenance.cost, 'tokens')));
         }
-        call.metadata = new index_js_74.Metadata(entries);
+        call.metadata = new index_js_75.Metadata(entries);
         return call;
     }
     function pair(channel, value) {
-        return new index_js_74.Keyed([new index_js_74.Text(channel), value]);
+        return new index_js_75.Keyed([new index_js_75.Text(channel), value]);
     }
     /** A number that knows what it is measuring. The unit is markup, as in `#annotated`. */
     function withUnit(value, unit) {
-        const quantity = index_js_74.Quantity.narrowest(value);
-        quantity.metadata = new index_js_74.Metadata([pair('unit', new index_js_74.Text(unit))]);
+        const quantity = index_js_75.Quantity.narrowest(value);
+        quantity.metadata = new index_js_75.Metadata([pair('unit', new index_js_75.Text(unit))]);
         return quantity;
     }
     /** A path seen for the first time: drawn in full, and given the name repeats use. */
     function named(text, id) {
-        const node = new index_js_74.Text(text);
-        node.metadata = new index_js_74.Metadata([pair('ID', new index_js_74.Text(id))]);
+        const node = new index_js_75.Text(text);
+        node.metadata = new index_js_75.Metadata([pair('ID', new index_js_75.Text(id))]);
         return node;
     }
     /**
@@ -22022,12 +22626,12 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
      * node. See the note at the top of this file.
      */
     function again(text, id) {
-        const node = new index_js_74.Text(text);
-        node.metadata = new index_js_74.Metadata([pair('ID', new index_js_74.Text(id)), pair('format', new index_js_74.Text('ID'))]);
+        const node = new index_js_75.Text(text);
+        node.metadata = new index_js_75.Metadata([pair('ID', new index_js_75.Text(id)), pair('format', new index_js_75.Text('ID'))]);
         return node;
     }
     function lines(...text) {
-        return new index_js_74.List(text.map((line) => new index_js_74.Text(line)));
+        return new index_js_75.List(text.map((line) => new index_js_75.Text(line)));
     }
     /**
      * The presentation channel, and the name that means "this Patch is a program".
@@ -22039,7 +22643,7 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
     const PROGRAM_FORMAT = 'patch';
     /** A result of path-and-count pairs: grouped Keyed Lists, which is a table. */
     function counts(entries) {
-        return new index_js_74.List(entries.map(([name, count]) => new index_js_74.Keyed([new index_js_74.Text(name), index_js_74.Quantity.narrowest(count)])));
+        return new index_js_75.List(entries.map(([name, count]) => new index_js_75.Keyed([new index_js_75.Text(name), index_js_75.Quantity.narrowest(count)])));
     }
     /**
      * The run, transcribed.
@@ -22053,8 +22657,8 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
     function program() {
         const secondPass = named('Fold Editor JS/docs/SECOND-PASS.md', 'SECOND-PASS.md');
         const mainTs = named('Fold Editor JS/src/app/main.ts', 'main.ts');
-        const trace = new index_js_74.Patch([
-            step('list', [new index_js_74.Text('Fold Editor JS')], {
+        const trace = new index_js_75.Patch([
+            step('list', [new index_js_75.Text('Fold Editor JS')], {
                 source: 'Bash',
                 elapsed: 212,
                 trust: exports.VERIFIED,
@@ -22064,10 +22668,10 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
                 source: 'Read',
                 elapsed: 38,
                 trust: exports.VERIFIED,
-                result: new index_js_74.Text('M0 through M6 are done. What is left is the exit criterion,'
+                result: new index_js_75.Text('M0 through M6 are done. What is left is the exit criterion,'
                     + ' which is a judgement rather than a milestone.'),
             }),
-            step('grep', [new index_js_74.Text('agent.trace|trace viewer'), new index_js_74.Text('.')], {
+            step('grep', [new index_js_75.Text('agent.trace|trace viewer'), new index_js_75.Text('.')], {
                 source: 'Grep',
                 elapsed: 141,
                 trust: exports.VERIFIED,
@@ -22079,29 +22683,29 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
                     ['Fold Editor JS/docs/SECOND-PASS.md', 1],
                 ]),
             }),
-            step('read', [new index_js_74.Text('Manifesto/MANIFESTO.md'), new index_js_74.Text('5.6')], {
+            step('read', [new index_js_75.Text('Manifesto/MANIFESTO.md'), new index_js_75.Text('5.6')], {
                 source: 'Read',
                 elapsed: 33,
                 trust: exports.VERIFIED,
-                result: new index_js_74.Text('make a trace viewer the Stage 1 demonstration subject'
+                result: new index_js_75.Text('make a trace viewer the Stage 1 demonstration subject'
                     + ' alongside the parity test'),
             }),
-            step('read', [new index_js_74.Text('Manifesto/PLAN-TYPESCRIPT.md'), index_js_74.Quantity.narrowest(72)], {
+            step('read', [new index_js_75.Text('Manifesto/PLAN-TYPESCRIPT.md'), index_js_75.Quantity.narrowest(72)], {
                 source: 'Read',
                 elapsed: 29,
                 trust: exports.VERIFIED,
-                result: new index_js_74.Text('Then, and only then, the agent-trace viewer:'
+                result: new index_js_75.Text('Then, and only then, the agent-trace viewer:'
                     + ' same editor, no new machinery.'),
             }),
-            step('conclude', [new index_js_74.Text('the next round of work is the agent-trace viewer')], {
+            step('conclude', [new index_js_75.Text('the next round of work is the agent-trace viewer')], {
                 source: 'claude-opus-5',
                 trust: exports.ASSERTED,
                 confidence: 0.94,
                 cost: 61000,
-                result: new index_js_74.Text('same editor, no new machinery - so the deliverable is a document,'
+                result: new index_js_75.Text('same editor, no new machinery - so the deliverable is a document,'
                     + ' and the finding is whatever the existing faces cannot draw'),
             }),
-            step('bash', [new index_js_74.Text('cd "Fold Editor JS" && cat README.md')], {
+            step('bash', [new index_js_75.Text('cd "Fold Editor JS" && cat README.md')], {
                 source: 'Bash',
                 elapsed: 96,
                 trust: exports.VERIFIED,
@@ -22109,10 +22713,10 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
                 // is a Symbol carrying its cause in metadata, so the plain face and the
                 // metadata face already draw it. Nothing in this file knows what a failed
                 // step looks like, and it did not have to.
-                result: (0, index_js_75.problem)('cd: no such file or directory - the shell does not keep'
+                result: (0, index_js_76.problem)('cd: no such file or directory - the shell does not keep'
                     + ' its working directory between calls'),
             }),
-            step('test', [new index_js_74.Text('npm test')], {
+            step('test', [new index_js_75.Text('npm test')], {
                 source: 'Bash',
                 elapsed: 8410,
                 trust: exports.VERIFIED,
@@ -22130,24 +22734,24 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
                 trust: exports.VERIFIED,
                 result: counts([['hashes', 6], ['lines', 458]]),
             }),
-            step('write', [new index_js_74.Text('Fold Editor JS/src/app/trace.ts')], {
+            step('write', [new index_js_75.Text('Fold Editor JS/src/app/trace.ts')], {
                 source: 'Write',
                 elapsed: 62,
                 trust: exports.VERIFIED,
-                result: new index_js_74.Text('a trace is a Patch: tool calls as instructions,'
+                result: new index_js_75.Text('a trace is a Patch: tool calls as instructions,'
                     + ' results on the result channel'),
             }),
             step('write', [again('Fold Editor JS/src/app/main.ts', 'main.ts')], {
                 source: 'Edit',
                 elapsed: 27,
                 trust: exports.VERIFIED,
-                result: new index_js_74.Text('#trace added to documentsFor'),
+                result: new index_js_75.Text('#trace added to documentsFor'),
             }),
-            step('conclude', [new index_js_74.Text('the viewer needed no new machinery, and one thing it did')], {
+            step('conclude', [new index_js_75.Text('the viewer needed no new machinery, and one thing it did')], {
                 source: 'claude-opus-5',
                 trust: exports.ASSERTED,
                 confidence: 0.81,
-                result: new index_js_74.Text('a Patch was drawn as a paragraph, because nothing had ever'
+                result: new index_js_75.Text('a Patch was drawn as a paragraph, because nothing had ever'
                     + ' drawn a program before'),
             }),
         ]);
@@ -22171,7 +22775,7 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
          * when it is opened somewhere else. And it degrades the way taste 4 asks: a
          * reader that has never heard of the name raises nothing and gets the value.
          */
-        trace.metadata = new index_js_74.Metadata([pair(FORMAT_CHANNEL, new index_js_74.Text(PROGRAM_FORMAT))]);
+        trace.metadata = new index_js_75.Metadata([pair(FORMAT_CHANNEL, new index_js_75.Text(PROGRAM_FORMAT))]);
         return trace;
     }
     /**
@@ -22189,12 +22793,12 @@ define("app/trace", ["require", "exports", "codec/index", "data/index", "patch/i
      * caused it, at minimum - and this is that something.
      */
     function traceDocument() {
-        const task = new index_js_74.Text(exports.TRACE_TASK);
-        task.metadata = new index_js_74.Metadata([pair(exports.SOURCE_CHANNEL, new index_js_74.Text('user'))]);
-        return (0, index_js_73.decode)((0, index_js_73.encode)(new index_js_74.List([task, program()]))).root;
+        const task = new index_js_75.Text(exports.TRACE_TASK);
+        task.metadata = new index_js_75.Metadata([pair(exports.SOURCE_CHANNEL, new index_js_75.Text('user'))]);
+        return (0, index_js_74.decode)((0, index_js_74.encode)(new index_js_75.List([task, program()]))).root;
     }
 });
-define("app/main", ["require", "exports", "codec/index", "data/index", "data/index", "editor/index", "app/findbox", "app/support", "editor/index", "os/index", "patch/index", "view/index", "app/derived", "app/drop", "app/counter", "app/example", "app/invoice", "app/kennedy", "app/menu", "app/picture", "app/reference", "app/snake", "app/title", "app/trace"], function (require, exports, index_js_76, index_js_77, index_js_78, index_js_79, findbox_js_1, support_js_1, index_js_80, index_js_81, index_js_82, index_js_83, derived_js_1, drop_js_1, counter_js_1, example_js_1, invoice_js_1, kennedy_js_1, menu_js_3, picture_js_1, reference_js_1, snake_js_1, title_js_1, trace_js_1) {
+define("app/main", ["require", "exports", "codec/index", "data/index", "data/index", "editor/index", "app/findbox", "app/support", "editor/index", "os/index", "patch/index", "view/index", "app/derived", "app/drop", "app/counter", "app/example", "app/invoice", "app/kennedy", "app/menu", "app/picture", "app/reference", "app/snake", "app/title", "app/trace"], function (require, exports, index_js_77, index_js_78, index_js_79, index_js_80, findbox_js_1, support_js_1, index_js_81, index_js_82, index_js_83, index_js_84, derived_js_1, drop_js_1, counter_js_1, example_js_1, invoice_js_1, kennedy_js_1, menu_js_3, picture_js_1, reference_js_1, snake_js_1, title_js_1, trace_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.main = main;
@@ -22331,11 +22935,11 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
      * the encoding itself, and not a parallel model kept alongside it.
      */
     function pangram() {
-        const typed = new index_js_77.List(PANGRAM.split(' ').map((word) => new index_js_77.Text(word)));
-        return (0, index_js_76.decode)((0, index_js_76.encode)(typed)).root;
+        const typed = new index_js_78.List(PANGRAM.split(' ').map((word) => new index_js_78.Text(word)));
+        return (0, index_js_77.decode)((0, index_js_77.encode)(typed)).root;
     }
     function fish() {
-        return (0, index_js_76.decode)((0, index_js_76.parseHex)(FISH)).root;
+        return (0, index_js_77.decode)((0, index_js_77.parseHex)(FISH)).root;
     }
     /**
      * A document with markup on it, for looking at milestone 5's faces.
@@ -22347,20 +22951,20 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
      * the same arity, which is what makes a table a table.
      */
     function annotated() {
-        const rgb = new index_js_77.Bytes(new Uint8Array([0x4C, 0x8B, 0xF5]));
-        rgb.metadata = new index_js_77.Metadata([new index_js_77.Keyed([new index_js_77.Text('format'), new index_js_77.Text('RGB')])]);
-        const named = new index_js_77.Text('Wednesday');
-        named.metadata = new index_js_77.Metadata([new index_js_77.Text('weekday')]);
-        const measured = new index_js_77.Quantity(37, 'integer', 1);
-        measured.metadata = new index_js_77.Metadata([new index_js_77.Keyed([new index_js_77.Text('unit'), new index_js_77.Text('°C')])]);
-        const table = new index_js_77.List([
-            new index_js_77.Keyed([new index_js_77.Text('north'), new index_js_77.Quantity(12, 'nibble', 0)]),
-            new index_js_77.Keyed([new index_js_77.Text('south'), new index_js_77.Quantity(9, 'nibble', 0)]),
-            new index_js_77.Keyed([new index_js_77.Text('east'), new index_js_77.Quantity(14, 'nibble', 0)]),
-            new index_js_77.Keyed([new index_js_77.Text('west'), new index_js_77.Quantity(3, 'nibble', 0)]),
+        const rgb = new index_js_78.Bytes(new Uint8Array([0x4C, 0x8B, 0xF5]));
+        rgb.metadata = new index_js_78.Metadata([new index_js_78.Keyed([new index_js_78.Text('format'), new index_js_78.Text('RGB')])]);
+        const named = new index_js_78.Text('Wednesday');
+        named.metadata = new index_js_78.Metadata([new index_js_78.Text('weekday')]);
+        const measured = new index_js_78.Quantity(37, 'integer', 1);
+        measured.metadata = new index_js_78.Metadata([new index_js_78.Keyed([new index_js_78.Text('unit'), new index_js_78.Text('°C')])]);
+        const table = new index_js_78.List([
+            new index_js_78.Keyed([new index_js_78.Text('north'), new index_js_78.Quantity(12, 'nibble', 0)]),
+            new index_js_78.Keyed([new index_js_78.Text('south'), new index_js_78.Quantity(9, 'nibble', 0)]),
+            new index_js_78.Keyed([new index_js_78.Text('east'), new index_js_78.Quantity(14, 'nibble', 0)]),
+            new index_js_78.Keyed([new index_js_78.Text('west'), new index_js_78.Quantity(3, 'nibble', 0)]),
         ]);
-        const document = new index_js_77.List([new index_js_77.Text('today'), named, measured, rgb, table]);
-        return (0, index_js_76.decode)((0, index_js_76.encode)(document)).root;
+        const document = new index_js_78.List([new index_js_78.Text('today'), named, measured, rgb, table]);
+        return (0, index_js_77.decode)((0, index_js_77.encode)(document)).root;
     }
     /**
      * SPECIFICATION section 7.2 as a document: the dissertation's own Google
@@ -22376,7 +22980,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
      * the table face was already applicable and was already one tab away.
      */
     function urlCaseStudy() {
-        return (0, index_js_76.decode)((0, index_js_76.encode)((0, index_js_81.toFold)((0, index_js_81.parseUrl)(GOOGLE_URL)))).root;
+        return (0, index_js_77.decode)((0, index_js_77.encode)((0, index_js_82.toFold)((0, index_js_82.parseUrl)(GOOGLE_URL)))).root;
     }
     /** The URL of `UrlAsciiWrapped.PNG`, character for character. */
     const GOOGLE_URL = 'https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=6&cad=rja'
@@ -22413,7 +23017,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
             return [(0, example_js_1.exampleDocument)()];
         if (hash === '#picture')
             return [(0, picture_js_1.pictureDocument)()];
-        return [new index_js_77.List()]; // '' and anything unrecognised: an empty page to type on
+        return [new index_js_78.List()]; // '' and anything unrecognised: an empty page to type on
     }
     /**
      * The registry the aside is drawn through: the built-ins, with the root pinned
@@ -22426,8 +23030,8 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
      * is why nothing needs to be written twice.
      */
     function encodingAside(document) {
-        const registry = (0, index_js_83.defaultRegistry)();
-        registry.force(document, new index_js_83.EncodingFace());
+        const registry = (0, index_js_84.defaultRegistry)();
+        registry.force(document, new index_js_84.EncodingFace());
         return registry;
     }
     /**
@@ -22443,7 +23047,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
         element.style.position = 'absolute';
         element.style.left = '0';
         element.style.top = `${top}px`;
-        element.style.font = (0, index_js_83.cssFont)(style);
+        element.style.font = (0, index_js_84.cssFont)(style);
         element.style.whiteSpace = 'pre';
         element.className = 'control';
         element.textContent = PANGRAM;
@@ -22518,7 +23122,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
             // clipboard without asking for permission first.
             // A paste event does not say whether shift was held, and ctrl+shift+v is
             // the reference where ctrl+v is a copy, so the keydown says it here.
-            if ((0, index_js_79.clipboardKey)(event)) {
+            if ((0, index_js_80.clipboardKey)(event)) {
                 pasteAsReference = event.shiftKey;
                 return;
             }
@@ -22555,7 +23159,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
             event.preventDefault();
             const { text, mark } = editor.handleCopy();
             event.clipboardData.setData('text/plain', text);
-            event.clipboardData.setData(index_js_79.FOLD_CLIPBOARD_TYPE, mark);
+            event.clipboardData.setData(index_js_80.FOLD_CLIPBOARD_TYPE, mark);
             follow();
         });
         input.addEventListener('beforecut', (event) => { event.preventDefault(); });
@@ -22566,7 +23170,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
             event.preventDefault();
             const { text, mark } = editor.handleCut();
             event.clipboardData.setData('text/plain', text);
-            event.clipboardData.setData(index_js_79.FOLD_CLIPBOARD_TYPE, mark);
+            event.clipboardData.setData(index_js_80.FOLD_CLIPBOARD_TYPE, mark);
             follow();
         });
         input.addEventListener('paste', (event) => {
@@ -22574,7 +23178,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
             if (editor === undefined || event.clipboardData === null)
                 return;
             event.preventDefault();
-            const mark = event.clipboardData.getData(index_js_79.FOLD_CLIPBOARD_TYPE);
+            const mark = event.clipboardData.getData(index_js_80.FOLD_CLIPBOARD_TYPE);
             const reference = pasteAsReference;
             pasteAsReference = false;
             editor.handlePaste(event.clipboardData.getData('text/plain'), mark === '' ? undefined : mark, reference);
@@ -22599,6 +23203,20 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
             }
             const box = host.getBoundingClientRect();
             current()?.handleClick(event.clientX - box.left, event.clientY - box.top);
+            follow();
+        });
+        // A click on the page itself - not the document, the menu, the support pane
+        // or anything else drawn on it - puts the cursor on the root. The host is
+        // only as tall as what is drawn, so the empty page below a short document is
+        // the body, and a click there is a click on the background.
+        addEventListener('mousedown', (event) => {
+            if (event.button !== 0)
+                return;
+            if (event.target !== document.body && event.target !== document.documentElement)
+                return;
+            event.preventDefault();
+            input.focus();
+            current()?.handleBackgroundClick();
             follow();
         });
         input.focus();
@@ -22630,21 +23248,21 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
      * put in front of someone.
      */
     function atEnd(document, reading) {
-        const selection = new index_js_79.Selection(document, reading);
+        const selection = new index_js_80.Selection(document, reading);
         for (;;) {
             const focus = selection.focus();
-            if (!(focus instanceof index_js_77.List) || focus.count() === 0)
+            if (!(focus instanceof index_js_78.List) || focus.count() === 0)
                 break;
             if (!selection.moveIn(focus.count() - 1))
                 break;
         }
-        const text = (0, index_js_79.characterText)(selection.focus());
+        const text = (0, index_js_80.characterText)(selection.focus());
         if (text !== undefined)
-            selection.moveIn((0, index_js_78.graphemeCount)(text));
+            selection.moveIn((0, index_js_79.graphemeCount)(text));
         return selection;
     }
     function main(root) {
-        const metrics = new index_js_83.TextMetrics();
+        const metrics = new index_js_84.TextMetrics();
         /**
          * Whether the page eases a box towards its new place or simply puts it there.
          *
@@ -22656,7 +23274,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
          * the other way, for looking at the easing on a machine that has asked for
          * stillness.
          */
-        const renderer = new index_js_83.Renderer(root, (0, index_js_83.motionFrom)(new URLSearchParams(location.search).get('motion'), (0, index_js_83.prefersMotion)()));
+        const renderer = new index_js_84.Renderer(root, (0, index_js_84.motionFrom)(new URLSearchParams(location.search).get('motion'), (0, index_js_84.prefersMotion)()));
         const widthOf = () => Math.max(root.clientWidth || root.getBoundingClientRect().width, 120);
         /**
          * One evaluator per page, shared by the drawing and the session.
@@ -22668,23 +23286,23 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
          */
         // The page's service registry, which is also what a service call in a drawn
         // Patch resolves through - so what a document can compute is what it holds.
-        const services = (0, index_js_81.standardRegistry)();
-        const evaluator = new index_js_82.Evaluator(services.registry);
+        const services = (0, index_js_82.standardRegistry)();
+        const evaluator = new index_js_83.Evaluator(services.registry);
         // One registry per page, held across redraws, because it is where a reader's
         // tab presses live and rebuilding it every frame would forget them.
-        let faces = (0, index_js_83.defaultRegistry)(evaluator);
+        let faces = (0, index_js_84.defaultRegistry)(evaluator);
         // With the window's band of the drawing in it, so a long table or a long
         // paste is laid out near the screen and nowhere else (`LayoutContext.viewport`).
-        const context = () => ({ ...(0, index_js_83.defaultContext)(metrics, widthOf(), faces), viewport: (0, index_js_83.viewportOf)(root) });
+        const context = () => ({ ...(0, index_js_84.defaultContext)(metrics, widthOf(), faces), viewport: (0, index_js_84.viewportOf)(root) });
         // Read through the live `faces`, not a captured one: this is rebuilt on every
         // hash change and the cursor has to follow the registry the page is actually
         // drawn with, or descending into a reference would consult a dead one.
-        const reading = (patch) => (0, index_js_83.readingThrough)(faces)(patch);
+        const reading = (patch) => (0, index_js_84.readingThrough)(faces)(patch);
         // The seam, wired once. The service registry is what resolves the name in
         // instruction 0 (B14) and the provider is what a save reaches the disk
         // through; neither is on the replay path, and the executor still recognises
         // `URL` by name rather than by asking - see `patch/executor.ts`.
-        const provider = new index_js_81.FileSystemAccessProvider();
+        const provider = new index_js_82.FileSystemAccessProvider();
         let documents = documentsFor(location.hash);
         let opened;
         let editor;
@@ -22710,7 +23328,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
         // After every draw: the tab title, and the support pane if it is showing.
         const drawn = () => { retitle(); support?.update(); };
         const build = () => {
-            faces = (0, index_js_83.defaultRegistry)(evaluator);
+            faces = (0, index_js_84.defaultRegistry)(evaluator);
             const first = documents[0];
             // One editor means one document. `#both` is a display mode and says so by
             // not having one, rather than by having one that silently edits the first.
@@ -22722,13 +23340,13 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
             // and a handle to write back to; one that was typed has neither yet, and
             // gets both from the click that accepts its first save.
             const file = opened?.document;
-            const sync = (0, index_js_81.fileSync)(provider, file?.handle.name ?? title_js_1.UNTITLED, opened?.writable === true ? file : undefined);
+            const sync = (0, index_js_82.fileSync)(provider, file?.handle.name ?? title_js_1.UNTITLED, opened?.writable === true ? file : undefined);
             const session = file === undefined
-                ? index_js_82.SessionPatch.of(first, sync, evaluator)
-                : index_js_82.SessionPatch.open((0, index_js_81.toFold)(file.url), file.source, sync, evaluator);
+                ? index_js_83.SessionPatch.of(first, sync, evaluator)
+                : index_js_83.SessionPatch.open((0, index_js_82.toFold)(file.url), file.source, sync, evaluator);
             const document = session.document();
             const aside = location.hash === '#encoding' ? encodingAside(document) : undefined;
-            editor = new index_js_79.Editor(session, atEnd(document, reading), renderer, context, aside, drawn, evaluator);
+            editor = new index_js_80.Editor(session, atEnd(document, reading), renderer, context, aside, drawn, evaluator);
         };
         const draw = () => {
             if (editor !== undefined) {
@@ -22736,14 +23354,14 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
                 for (const stale of [...root.querySelectorAll('.control')])
                     stale.remove();
                 if (location.hash === '#parity') {
-                    const box = (0, index_js_83.layout)(editor.session.document(), context());
+                    const box = (0, index_js_84.layout)(editor.session.document(), context());
                     control(root, context().style, box.height);
                 }
                 return;
             }
             let y = 0;
             const boxes = documents.map((document) => {
-                const box = (0, index_js_83.layout)(document, context(), 0, y);
+                const box = (0, index_js_84.layout)(document, context(), 0, y);
                 y += box.height + DOCUMENT_GAP;
                 return box;
             });
@@ -22757,7 +23375,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
         // no editor to redraw and so no first announcement.
         retitle();
         support = (0, support_js_1.supportPane)(() => editor, () => faces, metrics, () => { editor?.redraw(); });
-        (0, index_js_80.log)(`opened ${(0, title_js_1.documentName)(location.hash, undefined)}`);
+        (0, index_js_81.log)(`opened ${(0, title_js_1.documentName)(location.hash, undefined)}`);
         const refocus = textSource(() => editor, root, () => { support?.toggle(); });
         // Right-click. The no-chrome rule is scoped to the plain-text case, and a
         // reader who has opened a menu is expressing structure by definition - see
@@ -22788,15 +23406,15 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
                 const dropped = (0, drop_js_1.classifyDrop)(handle.name, bytes);
                 if (dropped.kind === 'value') {
                     editor?.handleDrop(x, y, dropped.value);
-                    (0, index_js_80.log)(`dropped ${handle.name} in, ${bytes.length} bytes`);
+                    (0, index_js_81.log)(`dropped ${handle.name} in, ${bytes.length} bytes`);
                     return;
                 }
-                void (0, index_js_81.readDocument)(handle).then((document) => {
+                void (0, index_js_82.readDocument)(handle).then((document) => {
                     services.url.resolved(document.url, document.source);
                     opened = { document, writable };
                     documents = [document.source];
-                    (0, index_js_80.clearLog)();
-                    (0, index_js_80.log)(`opened ${handle.name}${writable ? '' : ', read only'}, ${bytes.length} bytes`);
+                    (0, index_js_81.clearLog)();
+                    (0, index_js_81.log)(`opened ${handle.name}${writable ? '' : ', read only'}, ${bytes.length} bytes`);
                     renderer.clear();
                     build();
                     draw();
@@ -22822,7 +23440,7 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
                     if (native != null && createWritable !== undefined) {
                         // Rebuilt member by member rather than spread: these are methods on a
                         // platform prototype, and a spread of one of those copies nothing.
-                        openDropped((0, index_js_81.nativeHandle)({
+                        openDropped((0, index_js_82.nativeHandle)({
                             name: native.name,
                             getFile: () => native.getFile(),
                             createWritable: () => createWritable.call(native),
@@ -22855,8 +23473,8 @@ define("app/main", ["require", "exports", "codec/index", "data/index", "data/ind
             // one that cannot silently save a file the page is no longer showing.
             opened = undefined;
             documents = documentsFor(location.hash);
-            (0, index_js_80.clearLog)();
-            (0, index_js_80.log)(`opened ${(0, title_js_1.documentName)(location.hash, undefined)}`);
+            (0, index_js_81.clearLog)();
+            (0, index_js_81.log)(`opened ${(0, title_js_1.documentName)(location.hash, undefined)}`);
             renderer.clear();
             build();
             draw();
